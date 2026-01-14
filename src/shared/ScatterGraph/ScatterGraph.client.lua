@@ -2,7 +2,6 @@ local CollectionService = game:GetService("CollectionService")
 local InsertService = game:GetService("InsertService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-
 local InstanceFolder = workspace:FindFirstChild("ScatterGraphInstances")
 if InstanceFolder == nil then
 	InstanceFolder = Instance.new("Folder")
@@ -287,9 +286,10 @@ local function evaluateNode(n, volume, terrain)
 		return nil
 		
 	elseif nodeType == "PlaceGeometryOnPoints" then
-		local geoAssetURL = n:GetAttribute("GeometryAssetID")
-		local start = 14 --the first number of the Id
-		local geoAssetID = tonumber(string.sub(geoAssetURL, start, #geoAssetURL)) 
+		local geoAssetID = n:GetAttribute("GeometryAssetID")
+
+		--local start = 14 --the first number of the Id
+		--local geoAssetID = tonumber(string.sub(geoAssetURL, start, #geoAssetURL)) 
 		if geoAssetID ~= nil then
 			local geo = InsertService:LoadAsset(geoAssetID):GetChildren()[1]
 			local points = {}
@@ -364,7 +364,7 @@ local function onPluginButtonClicked()
 	clearAllInstances()
 	
 	--Collect all Biome Volumes
-	local biomeVolumes = CollectionService:GetTagged("BiomeVolume")
+	local biomeVolumes = CollectionService:GetTagged("ScatterGraphVolume")
 	local scatterGraph = nil
 	
 	--retrieve the ScatterGraph package
