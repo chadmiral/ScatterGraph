@@ -296,7 +296,10 @@ local function evaluateNode(n, volume, terrain)
 			
 			for _, wire in pairs(n:GetChildren()) do
 				if wire:IsA("ObjectValue") and wire.Name == "Points" then
-					points = evaluateNode(wire.Value, volume, terrain)
+					local newPoints = evaluateNode(wire.Value, volume, terrain)
+					for _,p in newPoints do
+						table.insert(points, p)
+				 	end
 				end
 			end
 			
@@ -334,7 +337,10 @@ local function evaluateNode(n, volume, terrain)
 		local points = {}
 		for _, wire in pairs(n:GetChildren()) do
 			if wire:IsA("ObjectValue") and wire.Name == "Points" then
-				points = evaluateNode(wire.Value, volume, terrain)
+				 local newPoints = evaluateNode(wire.Value, volume, terrain)
+				 for _,p in newPoints do
+					table.insert(points, p)
+				 end
 			end
 		end
 		
