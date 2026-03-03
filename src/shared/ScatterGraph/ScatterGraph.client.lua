@@ -280,6 +280,9 @@ local function evaluateNode(n, volume, terrain)
 		--output does nothing. Just needs to evaluate nodes upstream
 		for _, wire in pairs(n:GetChildren()) do
 			if wire:IsA("ObjectValue") then
+				if wire.Value == nil then
+					warn("missing value in OutputNode wire "..wire.Name)
+				end
 				evaluateNode(wire.Value, volume, terrain)
 			end
 		end
@@ -287,6 +290,9 @@ local function evaluateNode(n, volume, terrain)
 		
 	elseif nodeType == "PlaceGeometryOnPoints" then
 		local geoAssetID = n:GetAttribute("GeometryAssetID")
+		if geoAssetID == nil then
+			warn("missing AssetID in node "..n.Name)
+		end
 
 		--local start = 14 --the first number of the Id
 		--local geoAssetID = tonumber(string.sub(geoAssetURL, start, #geoAssetURL)) 
@@ -296,6 +302,9 @@ local function evaluateNode(n, volume, terrain)
 			
 			for _, wire in pairs(n:GetChildren()) do
 				if wire:IsA("ObjectValue") and wire.Name == "Points" then
+					if wire.Value == nil then
+						warn("Missing Value in ObjectValue wire "..wire.Name)
+					end
 					local newPoints = evaluateNode(wire.Value, volume, terrain)
 					for _,p in newPoints do
 						table.insert(points, p)
@@ -305,6 +314,9 @@ local function evaluateNode(n, volume, terrain)
 			
 			local scaleRange = n:GetAttribute("ScaleRange")
 			local rotationType = n:GetAttribute("RotationType")
+			if scaleRange == nil or rotationType == nil then
+				warn("Missing parameters in node "..n.Name)
+			end
 			
 			points = excludePoints(points, exclusionFunctions)
 			local result = placeGeoOnPoints(geo, points, scaleRange, rotationType)
@@ -314,6 +326,9 @@ local function evaluateNode(n, volume, terrain)
 		
 		local materialFilter = n:GetAttribute("MaterialFilter")
 		local slopeDensityCurve = n:GetAttribute("SlopeFilter")
+		if materialFilter == nil or slopeDensityCurve == nil then
+			warn("Missing parameters on node "..n.Name)
+		end
 		
 		for _, wire in pairs(n:GetChildren()) do
 			if wire:IsA("ObjectValue") and wire.Name == "Points" then
@@ -326,6 +341,9 @@ local function evaluateNode(n, volume, terrain)
 	elseif nodeType == "ScatterPoints" then
 		local seed = n:GetAttribute("Seed")
 		local spacing = n:GetAttribute("Spacing")
+		if seed == nil or spacing == nil then
+			warn("Missing parameters on node "..n.Name)
+		end
 		
 		return scatterPoints(volume, terrain, seed, spacing)
 	elseif nodeType == "ScatterPointsAroundPoints" then
@@ -333,10 +351,16 @@ local function evaluateNode(n, volume, terrain)
 		local innerRadius = n:GetAttribute("InnerRadius")
 		local outerRadius = n:GetAttribute("OuterRadius")
 		local count = n:GetAttribute("Count")
+		if innerRadius == nil or outerRadius == nil or count == nil then
+			warn("Missing Parameters on node "..n.Name)
+		end
 		
 		local points = {}
 		for _, wire in pairs(n:GetChildren()) do
 			if wire:IsA("ObjectValue") and wire.Name == "Points" then
+				if wire.Value == nil then
+					warn("missing Value in ObjectValue wire "..wire.Name)
+				end
 				 local newPoints = evaluateNode(wire.Value, volume, terrain)
 				 for _,p in newPoints do
 					table.insert(points, p)
