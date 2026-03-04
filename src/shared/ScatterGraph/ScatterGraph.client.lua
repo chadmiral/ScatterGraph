@@ -171,7 +171,7 @@ local function scatterPointsAroundPoints(volume, terrain, seed, points, count, i
 		end
 	end
 	
-	print("Scattering "..#newPoints.." children")
+	print("Scattering "..#newPoints.." children in volume "..volume.Name)
 	
 	return newPoints
 end
@@ -395,7 +395,6 @@ local function onPluginButtonClicked()
 	
 	--Collect all Biome Volumes
 	local biomeVolumes = CollectionService:GetTagged("ScatterGraphVolume")
-	local scatterGraph = nil
 	
 	--retrieve the ScatterGraph package
 	for _, volume in pairs(biomeVolumes) do
@@ -406,7 +405,7 @@ local function onPluginButtonClicked()
 		--see if we have an ObjectValue child
 		local biomeDefinitionRef = volume:FindFirstChildOfClass("ObjectValue")
 		
-		if biomeDefinitionRef == nil then 
+		if biomeDefinitionRef == nil then
 			local biomeDefinitionID = volume:GetAttribute("BiomeDefinitionAssetID")
 			
 			local biomeAsset = game:GetService("InsertService"):LoadAsset(biomeDefinitionID)
@@ -415,7 +414,11 @@ local function onPluginButtonClicked()
 		else
 			scatterGraph = biomeDefinitionRef.Value
 		end
-		evaluateGraph(scatterGraph, volume, terrain)
+
+		local enabled = volume:GetAttribute("Enabled")
+		if enabled then
+			evaluateGraph(scatterGraph, volume, terrain)
+		end
 	end
 end
 
