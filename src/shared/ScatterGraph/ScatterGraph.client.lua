@@ -50,6 +50,31 @@ local function evalNumberSequence(sequence: NumberSequence, time: number)
 	end
 end
 
+local function evalColorSequence(sequence: ColorSequence, time: number)
+    -- If time is 0 or 1, return the first or last value respectively
+    if time == 0 then
+        return sequence.Keypoints[1].Value
+    elseif time == 1 then
+        return sequence.Keypoints[#sequence.Keypoints].Value
+    end
+
+    -- Otherwise, step through each sequential pair of keypoints
+    for i = 1, #sequence.Keypoints - 1 do
+        local thisKeypoint = sequence.Keypoints[i]
+        local nextKeypoint = sequence.Keypoints[i + 1]
+        if time >= thisKeypoint.Time and time < nextKeypoint.Time then
+            -- Calculate how far alpha lies between the points
+            local alpha = (time - thisKeypoint.Time) / (nextKeypoint.Time - thisKeypoint.Time)
+            -- Evaluate the real value between the points using alpha
+            return Color3.new(
+                (nextKeypoint.Value.R - thisKeypoint.Value.R) * alpha + thisKeypoint.Value.R,
+                (nextKeypoint.Value.G - thisKeypoint.Value.G) * alpha + thisKeypoint.Value.G,
+                (nextKeypoint.Value.B - thisKeypoint.Value.B) * alpha + thisKeypoint.Value.B
+            )
+        end
+    end
+end
+
 local function snapPointsToTerrain(volume, terrain, points, materialFilter, slopeDensityCurve)
 	local raycastResults = {}
 	
@@ -78,12 +103,12 @@ local function snapPointsToTerrain(volume, terrain, points, materialFilter, slop
 		table.insert(materialFilterList, material)
 	end
 	
-	--print("Filtered materials list: ")
-	--print(materialFilterList)
+	print("Filtered materials list: ")
+	print(materialFilterList)
 	
 	for i = 1, #points do
 		if(raycastResults[i] ~= nil) then
-			--print(raycastResults[i].Instance.Name)
+			print(raycastResults[i].Material.Name)
 			
 			local dp = raycastResults[i].Normal:Dot(Vector3.new(0.0,1.0,0.0))
 			local terrainSlope = math.clamp(1.0 - dp, 0.0, 1.0)
@@ -95,6 +120,8 @@ local function snapPointsToTerrain(volume, terrain, points, materialFilter, slop
 
 			if (math.random() < probability) and (not table.find(materialFilterList, raycastResults[i].Material.Name)) then
 				table.insert(filteredPoints, points[i])
+				print("Pass")
+				print(materialFilterList)
 			end
 		end
 	end
@@ -176,7 +203,7 @@ local function scatterPointsAroundPoints(volume, terrain, seed, points, count, i
 	return newPoints
 end
 
-local function placeGeoOnPoints(templateGeo, points, scaleRange, rotationType)
+local function placeGeoOnPoints(templateGeo, points, scaleRange, colorRange, rotationType)
 	--print("Placing geometry on points...")
 	local instances = {}
 	
@@ -199,6 +226,18 @@ local function placeGeoOnPoints(templateGeo, points, scaleRange, rotationType)
 			scale = scaleRange.X + math.random() * (scaleRange.Y - scaleRange.X)
 		end
 		instance:ScaleTo(scale)
+
+		local tintColor = Color3.fromRGB(255, 255, 255)
+		if colorRange then
+			tintColor = evalColorSequence(colorRange, math.random())
+		end
+		for _, d in instance:GetDescendants() do
+			if d:IsA("SurfaceAppearance") then
+				d.Color = tintColor
+			end
+		end
+
+		
 		
 		--randomize rotation
 		if rotationType == "Random" then
@@ -314,12 +353,13 @@ local function evaluateNode(n, volume, terrain)
 			
 			local scaleRange = n:GetAttribute("ScaleRange")
 			local rotationType = n:GetAttribute("RotationType")
-			if scaleRange == nil or rotationType == nil then
+			local colorRange = n:GetAttribute("ColorRange")
+			if scaleRange == nil or rotationType == nil or colorRange == nil then
 				warn("Missing parameters in node "..n.Name)
 			end
 			
 			points = excludePoints(points, exclusionFunctions)
-			local result = placeGeoOnPoints(geo, points, scaleRange, rotationType)
+			local result = placeGeoOnPoints(geo, points, scaleRange, colorRange, rotationType)
 		end
 	elseif nodeType == "SnapPointsToTerrain" then
 		local points = {}
