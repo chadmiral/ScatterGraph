@@ -2,6 +2,11 @@ local CollectionService = game:GetService("CollectionService")
 local InsertService = game:GetService("InsertService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+local BrushToolActive = false
+
+local GraphNode = require(script.Parent.Nodes:WaitForChild("GraphNode"))
+local ScatterPointsNode = require(script.Parent.Nodes:WaitForChild("ScatterPointsNode"))
+
 local InstanceFolder = workspace:FindFirstChild("ScatterGraphInstances")
 if InstanceFolder == nil then
 	InstanceFolder = Instance.new("Folder")
@@ -21,6 +26,8 @@ local toolbar = plugin:CreateToolbar("ScatterGraph")
 -- Add a toolbar button labeled "Empty Script"
 local newScriptButton = toolbar:CreateButton("EvaluateScatterGraph", "Evaluate the Scatter Graph", "rbxassetid://14978048121")
 local clearButton = toolbar:CreateButton("Clear Instances", "Clear all ScatterGraph Instances", "")
+local brushButton = toolbar:CreateButton("Brush", "Enable Brush Mode", "")
+local testButton = toolbar:CreateButton("Test", "Test Button", "")
 
 local function clearAllInstances()
 	for _, instance in pairs(InstanceFolder:GetChildren()) do
@@ -103,12 +110,12 @@ local function snapPointsToTerrain(volume, terrain, points, materialFilter, slop
 		table.insert(materialFilterList, material)
 	end
 	
-	print("Filtered materials list: ")
-	print(materialFilterList)
+	--print("Filtered materials list: ")
+	--print(materialFilterList)
 	
 	for i = 1, #points do
 		if(raycastResults[i] ~= nil) then
-			print(raycastResults[i].Material.Name)
+			--print(raycastResults[i].Material.Name)
 			
 			local dp = raycastResults[i].Normal:Dot(Vector3.new(0.0,1.0,0.0))
 			local terrainSlope = math.clamp(1.0 - dp, 0.0, 1.0)
@@ -120,8 +127,8 @@ local function snapPointsToTerrain(volume, terrain, points, materialFilter, slop
 
 			if (math.random() < probability) and (not table.find(materialFilterList, raycastResults[i].Material.Name)) then
 				table.insert(filteredPoints, points[i])
-				print("Pass")
-				print(materialFilterList)
+				--("Pass")
+				--print(materialFilterList)
 			end
 		end
 	end
@@ -132,7 +139,7 @@ local function snapPointsToTerrain(volume, terrain, points, materialFilter, slop
 	return filteredPoints, raycastResults
 end
 
-
+--[[
 local function scatterPoints(volume, terrain, seed, spacing)
 	math.randomseed(seed)
 	
@@ -167,7 +174,7 @@ local function scatterPoints(volume, terrain, seed, spacing)
 	end
 	
 	return points
-end
+end--]]
 
 --points is in world space here. 
 local function scatterPointsAroundPoints(volume, terrain, seed, points, count, innerRadius, outerRadius)
@@ -207,12 +214,14 @@ local function placeGeoOnPoints(templateGeo, points, scaleRange, colorRange, rot
 	--print("Placing geometry on points...")
 	local instances = {}
 	
+	--debug part
 	local templatePart = Instance.new("Part")
 	templatePart.Size = Vector3.new(1,1,1)
 	templatePart.Shape = Enum.PartType.Ball
 	templatePart.Anchored = true
 	templatePart.CanCollide = false
 	templatePart.CanTouch = false
+
 	for _, p in points do
 		
 		--clone the template part and place it at the point
@@ -232,13 +241,18 @@ local function placeGeoOnPoints(templateGeo, points, scaleRange, colorRange, rot
 			tintColor = evalColorSequence(colorRange, math.random())
 		end
 		for _, d in instance:GetDescendants() do
-			if d:IsA("SurfaceAppearance") then
-				d.Color = tintColor
+			if d:IsA("MeshPart") then
+				local noTint = CollectionService:HasTag(d, "NoTint")
+				if not noTint then 
+					for _, sa in d:GetDescendants() do
+						if sa:IsA("SurfaceAppearance") then
+							sa.Color = tintColor
+						end
+					end
+				end
 			end
 		end
 
-		
-		
 		--randomize rotation
 		if rotationType == "Random" then
 			instance:PivotTo(instance:GetPivot() * CFrame.Angles(2 * math.random() * math.pi, 2 * math.random() * math.pi, 2 * math.random() * math.pi))
@@ -354,9 +368,10 @@ local function evaluateNode(n, volume, terrain)
 			local scaleRange = n:GetAttribute("ScaleRange")
 			local rotationType = n:GetAttribute("RotationType")
 			local colorRange = n:GetAttribute("ColorRange")
-			if scaleRange == nil or rotationType == nil or colorRange == nil then
+			--[[if scaleRange == nil or rotationType == nil or colorRange == nil then
 				warn("Missing parameters in node "..n.Name)
 			end
+			--]]
 			
 			points = excludePoints(points, exclusionFunctions)
 			local result = placeGeoOnPoints(geo, points, scaleRange, colorRange, rotationType)
@@ -385,7 +400,15 @@ local function evaluateNode(n, volume, terrain)
 			warn("Missing parameters on node "..n.Name)
 		end
 		
-		return scatterPoints(volume, terrain, seed, spacing)
+		--return scatterPoints(volume, terrain, seed, spacing)
+
+		local scatterPointsNode = ScatterPointsNode:new{
+			name="ScatterPointsNode",
+			_type="ScatterPointsNode",
+			seed=seed,
+			spacing=spacing
+		}
+		return scatterPointsNode:evaluate(volume,terrain)
 	elseif nodeType == "ScatterPointsAroundPoints" then
 		local seed = n:GetAttribute("Seed")
 		local innerRadius = n:GetAttribute("InnerRadius")
@@ -429,6 +452,7 @@ end
 	
 
 local function onPluginButtonClicked()
+	BrushToolActive = false
 	local terrain = workspace.Terrain
 	
 	clearAllInstances()
@@ -463,11 +487,27 @@ local function onPluginButtonClicked()
 end
 
 local function onClearButtonClicked()
+	BrushToolActive = false
 	clearAllInstances()
+end
+
+local function onBrushButtonClicked()
+	BrushToolActive = not BrushToolActive
+end
+
+local function onTestButtonClicked()
+	print("test")
+	local abstractNode = GraphNode:new()
+	abstractNode:evaluate(nil, nil)
+
+	local scatterPointsNode = ScatterPointsNode:new{name="ScatterPointsNode", _type="ScatterPointsNode"}
+	scatterPointsNode:evaluate(nil, nil)
 end
 
 newScriptButton.Click:Connect(onPluginButtonClicked)
 clearButton.Click:Connect(onClearButtonClicked)
+brushButton.Click:Connect(onBrushButtonClicked)
+testButton.Click:Connect(onTestButtonClicked)
 
 --[[
 local function onGraphChangedEvent()
