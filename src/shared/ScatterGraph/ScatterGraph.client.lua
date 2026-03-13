@@ -322,10 +322,21 @@ local function excludePoints(points: { Vector3 }, exclusionFunctions: { (Vector3
 	return newPoints
 end
 
-local function evaluateNode(n, volume, terrain)
+local function evaluateNode(n, volume, terrain, debugString)
 	--print("Evaluating Node "..n.Name)
 	
 	local exclusionFunctions = exclusionZoneFunctions()
+
+	if n == nil then
+		warn("Nil GraphNode!")
+		warn(debugString)
+	end
+
+	if debugString == nil then
+		debugString = n.Parent.Name.."/"..n.Name
+	else
+		debugString = n.Parent.Name.."/"..n.Name.."->"..debugString
+	end
 	
 	--first, do whatever this node needs to do
 	local nodeType = n:GetAttribute("NodeType")
@@ -336,7 +347,7 @@ local function evaluateNode(n, volume, terrain)
 				if wire.Value == nil then
 					warn("missing value in OutputNode wire "..wire.Name)
 				end
-				evaluateNode(wire.Value, volume, terrain)
+				evaluateNode(wire.Value, volume, terrain, debugString)
 			end
 		end
 		return nil
@@ -358,7 +369,7 @@ local function evaluateNode(n, volume, terrain)
 					if wire.Value == nil then
 						warn("Missing Value in ObjectValue wire "..wire.Name)
 					end
-					local newPoints = evaluateNode(wire.Value, volume, terrain)
+					local newPoints = evaluateNode(wire.Value, volume, terrain, debugString)
 					for _,p in newPoints do
 						table.insert(points, p)
 				 	end
@@ -387,7 +398,7 @@ local function evaluateNode(n, volume, terrain)
 		
 		for _, wire in pairs(n:GetChildren()) do
 			if wire:IsA("ObjectValue") and wire.Name == "Points" then
-				points = evaluateNode(wire.Value, volume, terrain)
+				points = evaluateNode(wire.Value, volume, terrain, debugString)
 			end
 		end
 		
@@ -424,7 +435,7 @@ local function evaluateNode(n, volume, terrain)
 				if wire.Value == nil then
 					warn("missing Value in ObjectValue wire "..wire.Name)
 				end
-				 local newPoints = evaluateNode(wire.Value, volume, terrain)
+				 local newPoints = evaluateNode(wire.Value, volume, terrain, debugString)
 				 for _,p in newPoints do
 					table.insert(points, p)
 				 end
@@ -445,7 +456,7 @@ local function evaluateGraph(g, volume, terrain)
 	for _, node in pairs(g:GetChildren()) do
 		local nodeType = node:GetAttribute("NodeType")
 		if nodeType == "Output" then
-			evaluateNode(node, volume, terrain)
+			evaluateNode(node, volume, terrain, nil)
 		end
 	end
 end	
