@@ -353,15 +353,20 @@ local function evaluateNode(n, volume, terrain, debugString)
 		return nil
 		
 	elseif nodeType == "PlaceGeometryOnPoints" then
-		local geoAssetID = n:GetAttribute("GeometryAssetID")
-		if geoAssetID == nil then
-			warn("missing AssetID in node "..n.Name)
+		local geo = nil
+		local assetWire = n:FindFirstChild("Asset")
+		if assetWire and assetWire:IsA("ObjectValue") and assetWire.Value ~= nil then
+			geo = assetWire.Value
+		else
+			local geoAssetID = n:GetAttribute("GeometryAssetID")
+			if geoAssetID ~= nil then
+				geo = InsertService:LoadAsset(geoAssetID):GetChildren()[1]
+			else
+				warn("PlaceGeometryOnPoints node "..n.Name..": set ObjectValue Asset or GeometryAssetID")
+			end
 		end
 
-		--local start = 14 --the first number of the Id
-		--local geoAssetID = tonumber(string.sub(geoAssetURL, start, #geoAssetURL)) 
-		if geoAssetID ~= nil then
-			local geo = InsertService:LoadAsset(geoAssetID):GetChildren()[1]
+		if geo ~= nil then
 			local points = {}
 			
 			for _, wire in pairs(n:GetChildren()) do
