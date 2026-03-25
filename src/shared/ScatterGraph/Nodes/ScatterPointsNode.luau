@@ -1,6 +1,8 @@
 local GraphNode = require(script.Parent:WaitForChild("GraphNode"))
 
 ScatterPointsNode = GraphNode:new()
+ScatterPointsNode.name = "ScatterPointsNode"
+ScatterPointsNode._type = "ScatterPointsNode"
 ScatterPointsNode.seed = -1
 ScatterPointsNode.spacing = -1
 
@@ -40,15 +42,18 @@ local function scatterPoints(volume, terrain, seed, spacing)
 	return points
 end
 
-function ScatterPointsNode:evaluate(volume, terrain)
+function ScatterPointsNode:evaluate(volume, terrain, ctx)
     print("Evaluating ScatterPointsNode "..self.name)
-    --[[
-    print("name: "..self.name)  
-    print("type: "..self._type)
-    print("seed: "..self.seed)
-    print("spacing: "..self.seed)
-    --]]
-    return scatterPoints(volume, terrain, self.seed, self.spacing)
+    local seed = self.seed
+    local spacing = self.spacing
+    if ctx and ctx.node then
+        seed = ctx.node:GetAttribute("Seed")
+        spacing = ctx.node:GetAttribute("Spacing")
+        if seed == nil or spacing == nil then
+            warn("Missing parameters on node "..ctx.node.Name)
+        end
+    end
+    return scatterPoints(volume, terrain, seed, spacing)
 end
 
 return ScatterPointsNode
