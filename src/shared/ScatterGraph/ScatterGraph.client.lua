@@ -13,18 +13,10 @@ local ScatterPointsAroundPointsNode = require(script.Parent.Nodes:WaitForChild("
 local Helpers = require(script.Parent:WaitForChild("ScatterGraphHelpers"))
 
 local InstanceFolder = workspace:FindFirstChild("ScatterGraphInstances")
-if InstanceFolder == nil then
-	InstanceFolder = Instance.new("Folder")
-	InstanceFolder.Name = "ScatterGraphInstances"
-	InstanceFolder.Parent = workspace
-end
+
 
 local ScatterGraphsFolder = ReplicatedStorage:FindFirstChild("ScatterGraphs")
-if ScatterGraphsFolder == nil then
-	ScatterGraphsFolder = Instance.new("Folder")
-	ScatterGraphsFolder.Name = "ScatterGraphs"
-	ScatterGraphsFolder.Parent = ReplicatedStorage
-end
+
 
 local toolbar = plugin:CreateToolbar("ScatterGraph")
 
@@ -94,6 +86,18 @@ local function onPluginButtonClicked()
 	local terrain = workspace.Terrain
 	
 	clearAllInstances()
+
+	if InstanceFolder == nil then
+		InstanceFolder = Instance.new("Folder")
+		InstanceFolder.Name = "ScatterGraphInstances"
+		InstanceFolder.Parent = workspace
+	end
+
+	if ScatterGraphsFolder == nil then
+		ScatterGraphsFolder = Instance.new("Folder")
+		ScatterGraphsFolder.Name = "ScatterGraphs"
+		ScatterGraphsFolder.Parent = ReplicatedStorage
+	end
 	
 	local biomeVolumes = CollectionService:GetTagged("ScatterGraphVolume")
 	
