@@ -148,7 +148,7 @@ testButton.Click:Connect(onTestButtonClicked)
 
 --[[
 local function onGraphChangedEvent()
-	onPluginButtonClicked()
+	onPluginButtonClicked() 
 end
 
 
