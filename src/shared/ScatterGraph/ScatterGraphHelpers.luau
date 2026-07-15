@@ -51,7 +51,11 @@ function M.snapPointsToTerrain(volume, terrain, points, materialFilter, slopeDen
 		local rayOrigin = Vector3.new(point.X, volume.CFrame.Position.Y + volume.Size.Y * 0.5, point.Z)
 		local rayDir = Vector3.new(0, -volume.Size.Y)
 		local raycastResult = workspace:Raycast(rayOrigin, rayDir, params)
-		table.insert(raycastResults, raycastResult)
+		-- Index by i (not table.insert): a missed ray returns nil, and
+		-- table.insert(t, nil) is a silent no-op that would shift every later
+		-- result down an index, misaligning raycastResults from points and
+		-- corrupting the material/slope filters.
+		raycastResults[i] = raycastResult
 
 		if raycastResult ~= nil then
 			if raycastResult.Instance == terrain then
@@ -119,23 +123,26 @@ function M.placeGeoOnPoints(
 	scaleRange,
 	colorRange,
 	rotationType,
-	instanceFolder: Folder
+	instanceFolder: Folder,
+	occupancy,
+	avoidIntersections: boolean?,
+	radius: number?,
+	priority: number?,
+	branchId: any
 )
 	local instances = {}
+	radius = radius or 5
+	priority = priority or 0
 
-	local templatePart = Instance.new("Part")
-	templatePart.Size = Vector3.new(1, 1, 1)
-	templatePart.Shape = Enum.PartType.Ball
-	templatePart.Anchored = true
-	templatePart.CanCollide = false
-	templatePart.CanTouch = false
+	-- Branches that opt in to avoidance are deferred: their placements are
+	-- collected as candidates and resolved once, after every branch has been
+	-- evaluated, so the outcome is independent of branch evaluation order.
+	local defer = avoidIntersections == true and occupancy ~= nil
 
 	for _, p in points do
 		local instance = templateGeo:Clone()
 		instance.Parent = instanceFolder
 		instance:PivotTo(CFrame.new(p))
-
-		CollectionService:AddTag(instance, "ScatterGraphInstance")
 
 		local scale = 1
 		if scaleRange then
@@ -166,8 +173,28 @@ function M.placeGeoOnPoints(
 			instance:PivotTo(instance:GetPivot() * CFrame.fromAxisAngle(Vector3.new(0, 1, 0), math.random() * math.pi * 2))
 		end
 
-		table.insert(instances, instances)
+		-- The footprint is a circle of the given radius centered on the placement
+		-- point (rotation/scale pivot about p, so the center stays at p).
+		if defer then
+			-- Do not tag yet; resolveDeferred decides which candidates survive.
+			occupancy:addCandidate({
+				instance = instance,
+				x = p.X,
+				z = p.Z,
+				radius = radius,
+				priority = priority,
+				branchId = branchId,
+			})
+		else
+			CollectionService:AddTag(instance, "ScatterGraphInstance")
+			-- Register as an always-kept footprint so opt-in branches avoid it.
+			if occupancy then
+				occupancy:addSolid(p.X, p.Z, radius, branchId)
+			end
+			table.insert(instances, instance)
+		end
 	end
+
 	return instances
 end
 

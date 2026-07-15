@@ -7,6 +7,9 @@ OutputNode._type = "OutputNode"
 function OutputNode:evaluate(volume, terrain, ctx)
 	local n = ctx.node
 	local debugString = ctx.debugString
+	-- Branch order does not affect placement results: intersection avoidance is
+	-- resolved globally after all branches run (see OccupancyStore). Priority is
+	-- set per rule on the PlaceGeometryOnPoints node.
 	for _, wire in pairs(n:GetChildren()) do
 		if wire:IsA("ObjectValue") then
 			if wire.Value == nil then

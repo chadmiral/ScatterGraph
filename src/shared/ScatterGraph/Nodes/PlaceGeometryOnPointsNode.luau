@@ -40,9 +40,26 @@ function PlaceGeometryOnPointsNode:evaluate(volume, terrain, ctx)
 		local scaleRange = n:GetAttribute("ScaleRange")
 		local rotationType = n:GetAttribute("RotationType")
 		local colorRange = n:GetAttribute("ColorRange")
+		local avoidIntersections = n:GetAttribute("AvoidIntersections") == true
+		local radius = n:GetAttribute("Radius") or 5
+		local priority = n:GetAttribute("Priority") or 0
 
 		points = Helpers.excludePoints(points, ctx.exclusionFunctions)
-		Helpers.placeGeoOnPoints(geo, points, scaleRange, colorRange, rotationType, ctx.instanceFolder)
+		-- The terminal node uniquely identifies this branch, so its own
+		-- placements never reject one another during resolution.
+		Helpers.placeGeoOnPoints(
+			geo,
+			points,
+			scaleRange,
+			colorRange,
+			rotationType,
+			ctx.instanceFolder,
+			ctx.occupancy,
+			avoidIntersections,
+			radius,
+			priority,
+			n
+		)
 	end
 end
 

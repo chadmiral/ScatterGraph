@@ -176,6 +176,9 @@ Terminal node. Clones a template model at each input point, applies scale, optio
 | **`ScaleRange`** | `Vector2` | No | Uniform scale range: **`X`** = minimum, **`Y`** = maximum. Sampled as `X + random() * (Y - X)`. Defaults to `1` when omitted. |
 | **`RotationType`** | `string` | No | How to rotate each instance (see below). |
 | **`ColorRange`** | `ColorSequence` | No | Random tint applied to `SurfaceAppearance.Color` on descendant `MeshPart`s. Sampled with `random()` as the sequence time. |
+| **`AvoidIntersections`** | `boolean` | No | When `true`, this rule participates in order-independent intersection avoidance: an instance is dropped if its circular footprint would overlap another rule's footprint. Defaults to `false`. See [Cross-branch intersection avoidance](#cross-branch-intersection-avoidance). |
+| **`Radius`** | `number` | No | Horizontal footprint radius (studs) used for intersection tests. Two placements overlap when the distance between their centers is less than the sum of their radii. Defaults to `5`. |
+| **`Priority`** | `number` | No | Tiebreak when two avoiding rules contest the same space — the **lower** **`Priority`** number is kept (`0` is the highest priority). Defaults to `0`. Has no effect unless **`AvoidIntersections`** is set. |
 
 | Wire | Required | Description |
 |------|----------|-------------|
@@ -207,6 +210,41 @@ Graph entry point. Evaluates every child **`ObjectValue`** (each pointing at a r
 | **`ObjectValue`** (one per rule) | `ObjectValue` | **`NodeType`** = **`OutputNode`**. **`Value`** → terminal **`PlaceGeometryOnPoints`** for that rule. |
 
 **Output:** `nil` (side effect is placed instances).
+
+Branch evaluation order does **not** affect placement results. Intersection avoidance is resolved globally after every branch has run (see [Cross-branch intersection avoidance](#cross-branch-intersection-avoidance)).
+
+---
+
+## Cross-branch intersection avoidance
+
+Each **`Output`** rule (branch) is normally placed independently, so a tree from one branch and a boulder from another can overlap. To prevent this without restructuring the graph, set **`AvoidIntersections`** = `true` on the **`PlaceGeometryOnPoints`** node of each rule that should not overlap others. **No ordering, wiring, or extra nodes are required** — just mark the nodes.
+
+**How it works:**
+
+- During a graph evaluation, an **occupancy store** tracks the circular footprint (center + **`Radius`**) of every placed instance.
+- Rules **without** **`AvoidIntersections`** are placed immediately and always kept ("solid").
+- Rules **with** **`AvoidIntersections`** are **deferred**: their instances become *candidates*.
+- After **all** branches have been evaluated, candidates are resolved in one pass, in a fixed global order — **lowest** **`Priority`** number first (`0` = highest priority), ties broken by a deterministic spatial key. A candidate is kept if its footprint circle does not overlap any already-kept footprint; otherwise it is discarded.
+
+Because resolution runs after the whole graph is evaluated and processes candidates in a fixed order, **the result is identical no matter what order the branches were evaluated in.**
+
+**Semantics:**
+
+- **Order-independent.** Marking the nodes is enough; you never need to reason about which branch runs first.
+- **Cross-branch only.** A rule's own instances (including cluster nodes) never reject one another, so intended clustering is preserved.
+- **Marked yields to unmarked.** An **`AvoidIntersections`** rule always avoids a non-avoiding rule (the latter is placed unconditionally).
+- **`Priority` decides contested space.** When two avoiding rules compete for the same spot, the **lower** **`Priority`** number is kept (`0` is the highest priority). Equal priority is resolved by a stable spatial tiebreak (still deterministic).
+- **Radius test.** Overlap uses each rule's **`Radius`** as a horizontal footprint circle; two placements clash when the distance between centers is less than the sum of their radii. Registration uses **`Radius`** even for non-avoiding rules, so opt-in rules avoid them too.
+- **Density trade-off.** Discarded placements are skipped, so an avoiding rule may end up sparser where it competes with denser geometry.
+
+**Example — trees and boulders never intersect:**
+
+| Rule | `AvoidIntersections` | `Radius` | `Priority` |
+|------|----------------------|----------|------------|
+| `Cypress_Tree_A` | `true` | `8` | `0` |
+| `Boulder_Large` | `true` | `4` | `10` |
+
+Both rules avoid each other regardless of evaluation order. Where a tree and a boulder would overlap, the tree (lower **`Priority`** number = higher priority) is kept and the boulder is dropped. If you only mark one rule (e.g. only `Boulder_Large`), boulders avoid trees but trees are placed freely — still order-independent.
 
 ---
 
@@ -240,7 +278,8 @@ Graph entry point. Evaluates every child **`ObjectValue`** (each pointing at a r
 | `ScatterPoints` | `NodeType`, `Seed`, `Spacing` |
 | `ScatterPointsAroundPoints` | `NodeType`, `Seed`, `InnerRadius`, `OuterRadius`, `Count` |
 | `SnapPointsToTerrain` | `NodeType`, `MaterialFilter`, `SlopeFilter` |
-| `PlaceGeometryOnPoints` | `NodeType`, `GeometryAssetID`, `ScaleRange`, `RotationType`, `ColorRange` |
+| `PlaceGeometryOnPoints` | `NodeType`, `GeometryAssetID`, `ScaleRange`, `RotationType`, `ColorRange`, `AvoidIntersections`, `Radius`, `Priority` |
+| `Output` registry entry | `NodeType` = `OutputNode` |
 | Scatter volume | `Enabled`, `BiomeDefinitionAssetID` |
 | Wire: `Points` | `NodeType` = `Points` |
 | Wire: `Asset` | `NodeType` = `Asset` |
@@ -253,4 +292,5 @@ Graph entry point. Evaluates every child **`ObjectValue`** (each pointing at a r
 |------|------|
 | `src/shared/ScatterGraph/ScatterGraph.client.lua` | Plugin entry; volume iteration, node registry, evaluation loop |
 | `src/shared/ScatterGraph/ScatterGraphHelpers.luau` | Terrain snap, clustering, placement, exclusion zones |
+| `src/shared/ScatterGraph/OccupancyStore.luau` | Spatial hash of placed footprint circles (center + `Radius`) for cross-branch intersection avoidance |
 | `src/shared/ScatterGraph/Nodes/` | Per-node evaluation logic |

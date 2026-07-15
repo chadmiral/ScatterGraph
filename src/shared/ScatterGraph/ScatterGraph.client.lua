@@ -11,6 +11,7 @@ local PlaceGeometryOnPointsNode = require(script.Parent.Nodes:WaitForChild("Plac
 local SnapPointsToTerrainNode = require(script.Parent.Nodes:WaitForChild("SnapPointsToTerrainNode"))
 local ScatterPointsAroundPointsNode = require(script.Parent.Nodes:WaitForChild("ScatterPointsAroundPointsNode"))
 local Helpers = require(script.Parent:WaitForChild("ScatterGraphHelpers"))
+local OccupancyStore = require(script.Parent:WaitForChild("OccupancyStore"))
 
 local InstanceFolder = workspace:FindFirstChild("ScatterGraphInstances")
 
@@ -40,6 +41,10 @@ local nodeRegistry = {
 
 local evaluateNode
 
+-- Shared across all branches of a single graph evaluation so later branches can
+-- avoid geometry placed by earlier ones. Reset in evaluateGraph.
+local currentOccupancy = nil
+
 evaluateNode = function(n, volume, terrain, debugString)
 	local exclusionFunctions = Helpers.exclusionZoneFunctions()
 
@@ -64,6 +69,7 @@ evaluateNode = function(n, volume, terrain, debugString)
 			exclusionFunctions = exclusionFunctions,
 			instanceFolder = InstanceFolder,
 			insertService = InsertService,
+			occupancy = currentOccupancy,
 		})
 	else
 		warn("Invalid node encountered: "..n.Name)
@@ -71,12 +77,16 @@ evaluateNode = function(n, volume, terrain, debugString)
 end
 
 local function evaluateGraph(g, volume, terrain)
+	currentOccupancy = OccupancyStore.new()
 	for _, node in pairs(g:GetChildren()) do
 		local nodeType = node:GetAttribute("NodeType")
 		if nodeType == "Output" then
 			evaluateNode(node, volume, terrain, nil)
 		end
 	end
+	-- Resolve intersection-avoiding placements once every branch has run, so the
+	-- outcome does not depend on branch evaluation order.
+	currentOccupancy:resolveDeferred()
 end	
 
 local function onPluginButtonClicked()
