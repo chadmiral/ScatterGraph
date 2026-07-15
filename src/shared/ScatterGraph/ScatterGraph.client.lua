@@ -15,9 +15,6 @@ local Helpers = require(script.Parent:WaitForChild("ScatterGraphHelpers"))
 local InstanceFolder = workspace:FindFirstChild("ScatterGraphInstances")
 
 
-local ScatterGraphsFolder = ReplicatedStorage:FindFirstChild("ScatterGraphs")
-
-
 local toolbar = plugin:CreateToolbar("ScatterGraph")
 
 -- Add a toolbar button labeled "Empty Script"
@@ -27,7 +24,8 @@ local brushButton = toolbar:CreateButton("Brush", "Enable Brush Mode", "")
 local testButton = toolbar:CreateButton("Test", "Test Button", "")
 
 local function clearAllInstances()
-	for _, instance in pairs(InstanceFolder:GetChildren()) do
+	local instances = CollectionService:GetTagged("ScatterGraphInstance")
+	for _, instance in pairs(instances) do
 		instance:Destroy()
 	end
 end
@@ -84,20 +82,14 @@ end
 local function onPluginButtonClicked()
 	BrushToolActive = false
 	local terrain = workspace.Terrain
-	
-	clearAllInstances()
 
 	if InstanceFolder == nil then
 		InstanceFolder = Instance.new("Folder")
 		InstanceFolder.Name = "ScatterGraphInstances"
 		InstanceFolder.Parent = workspace
 	end
-
-	if ScatterGraphsFolder == nil then
-		ScatterGraphsFolder = Instance.new("Folder")
-		ScatterGraphsFolder.Name = "ScatterGraphs"
-		ScatterGraphsFolder.Parent = ReplicatedStorage
-	end
+	
+	clearAllInstances()
 	
 	local biomeVolumes = CollectionService:GetTagged("ScatterGraphVolume")
 	

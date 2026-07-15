@@ -135,6 +135,8 @@ function M.placeGeoOnPoints(
 		instance.Parent = instanceFolder
 		instance:PivotTo(CFrame.new(p))
 
+		CollectionService:AddTag(instance, "ScatterGraphInstance")
+
 		local scale = 1
 		if scaleRange then
 			scale = scaleRange.X + math.random() * (scaleRange.Y - scaleRange.X)
