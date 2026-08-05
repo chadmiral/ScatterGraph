@@ -9,7 +9,7 @@ This document describes every node type, attribute, wire, tag, and volume settin
 ## How evaluation works
 
 1. The plugin finds all instances tagged **`ScatterGraphVolume`**.
-2. For each volume with **`Enabled`** = `true`, it loads the linked biome graph (see [Scatter volume](#scatter-volume)).
+2. Volumes with **`Enabled`** = `true` are grouped by the biome graph they link to (see [Scatter volume](#scatter-volume)), and each group is evaluated **once** for all of its volumes (see [Overlapping volumes](#overlapping-volumes)).
 3. It finds children of the graph root with **`NodeType`** = **`Output`** and evaluates each one.
 4. **`Output`** nodes follow **`ObjectValue`** wires to terminal **`PlaceGeometryOnPoints`** nodes.
 5. Each node walks upstream through **`Points`** wires until it reaches a source **`ScatterPoints`** node.
@@ -90,10 +90,45 @@ Volumes define *where* a biome graph is evaluated. Tag the volume part with **`S
 | Attribute / child | Type | Required | Description |
 |-------------------|------|----------|-------------|
 | **`Enabled`** | `boolean` | Yes (for evaluation) | When `true`, the graph is evaluated for this volume when the plugin runs. |
-| **`BiomeDefinitionAssetID`** | `number` | One of these | Published asset ID of the biome graph package. Loaded via `InsertService`; first child is used as the graph. |
+| **`BiomeDefinitionAssetID`** | `number` | One of these | Published asset ID of the biome graph package. Loaded via `InsertService` once per group of volumes sharing the ID; first child is used as the graph. |
 | Child **`ObjectValue`** | `ObjectValue` | One of these | **`Value`** points directly at the biome root model (in-place definition). Used when **`BiomeDefinitionAssetID`** is not set. |
 
-The volume's **`Size`** and **`CFrame`** define the scatter bounds. Point generation uses the volume's X/Z footprint; terrain raycasts span the volume's Y extent.
+The volume's **`Size`**, **`CFrame`**, and **shape** define the scatter bounds. Point generation covers the volume's footprint — the ground area a downward ray can hit it from — and terrain raycasts span the volume's world-space Y extent. A point survives only if the terrain it lands on is inside the volume, so the volume's shape bounds placement vertically as well as horizontally.
+
+### Volume shapes
+
+Every Roblox part shape is supported, for scatter volumes and exclusion volumes alike:
+
+| Shape | Region |
+|-------|--------|
+| `Block` | The whole box. |
+| `Ball` | A sphere at the center. Roblox never stretches a ball into an ellipsoid, so the diameter is the **smallest** **`Size`** component. |
+| `Cylinder` | A circular cylinder whose axis runs along the part's **X** axis; the diameter is the smaller of **`Size.Y`** and **`Size.Z`**. Rotate it 90° to stand it up as a circular region. |
+| `Wedge` | The box cut by the slanted face, which is full height along the **+Z** edge and tapers to nothing at **-Z**. |
+| `CornerWedge` | The box cut by two slanted faces meeting over the **(+X, -Z)** corner. |
+
+`MeshPart`s, unions, and other parts fall back to their bounding box.
+
+Volumes may be rotated arbitrarily; the footprint and the raycast extent are computed in world space, so a tilted volume still scatters over the ground area it actually covers.
+
+### Overlapping volumes
+
+Volumes that link to the **same** biome definition form a group and are evaluated together as a single region. Where they overlap, the result is a **union**, not a double dose:
+
+- The sampling lattice is anchored to the world origin and each cell's jitter is derived from that cell's index, so every volume in a group agrees on where the points in a shared cell go. Each cell contributes at most one point no matter how many volumes cover it.
+- Density in an overlap therefore matches density anywhere else, and a region built from several overlapping volumes is indistinguishable from the same region built as one volume. Splitting a volume in two, with the halves overlapping, does not change the result.
+- Intersection avoidance spans the whole group: with **`AvoidIntersections`** set, a tree in one volume and a boulder in another will not overlap (see [Cross-branch intersection avoidance](#cross-branch-intersection-avoidance)).
+- Volumes in a group do not have to touch. Scattered patches sharing one definition cost nothing for the empty space between them.
+
+Two volumes linked to **different** definitions remain independent: both scatter over the shared ground, and their instances can intersect. That is how two different biomes are meant to interleave along a border.
+
+Grouping is by the *definition the volume links to*, so:
+
+| Volumes link via | Grouped together? |
+|------------------|-------------------|
+| Child **`ObjectValue`** → the same graph `Model` | Yes |
+| The same **`BiomeDefinitionAssetID`** | Yes (the asset is loaded once for the group) |
+| **`ObjectValue`** → two separate copies of the same graph | No — separate definitions |
 
 ---
 
@@ -101,12 +136,12 @@ The volume's **`Size`** and **`CFrame`** define the scatter bounds. Point genera
 
 ### ScatterPoints
 
-Generates an initial point cloud using a simplified Poisson-disc grid: one jittered point per grid cell, with cell size derived from **`Spacing`**. Points are placed on the volume floor (Y = 0 in volume local space) and transformed to world space.
+Generates an initial point cloud using a simplified Poisson-disc grid: one jittered point per grid cell, with cell size derived from **`Spacing`**. The lattice is anchored to the world origin and each cell's jitter is derived from **`Seed`** together with that cell's index, so the same cell always yields the same point — this is what lets overlapping volumes in a group union cleanly. Cells whose ground column misses every volume in the group are discarded.
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
 | **`NodeType`** | `string` | Yes | **`ScatterPoints`** |
-| **`Seed`** | `number` | Yes | Random seed passed to `math.randomseed`. Controls jitter within each grid cell. |
+| **`Seed`** | `number` | Yes | Random seed. Controls jitter within each grid cell, and seeds the stream that downstream nodes draw from for scale, rotation, and the slope filter. |
 | **`Spacing`** | `number` | Yes | Target minimum distance between points (studs). Cell size = `Spacing / sqrt(2)`. |
 
 **Inputs:** None (source node).
@@ -133,13 +168,13 @@ For each point from upstream, generates up to **`Count`** additional points in a
 
 **Output:** `{ Vector3 }` — cluster offset points only (does **not** pass through upstream seed positions; generates **`Count`** new points per upstream seed).
 
-**Note:** Upstream points are collected from all **`Points`** wires. Exclusion volumes are applied before clustering.
+**Note:** Upstream points are collected from all **`Points`** wires. Exclusion volumes are applied before clustering. Offsets that land outside the volume's footprint are dropped, so clusters seeded near an edge do not spill past it — expect fewer than **`Count`** points per seed there.
 
 ---
 
 ### SnapPointsToTerrain
 
-Raycasts each point downward through the scatter volume to find terrain. Snaps surviving points to the hit position. Filters by slope probability and material denylist.
+Raycasts each point downward through the scatter volume to find terrain. Snaps surviving points to the hit position, discarding any hit that falls outside the volume's shape. Filters by slope probability and material denylist.
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -153,7 +188,7 @@ Raycasts each point downward through the scatter volume to find terrain. Snaps s
 |------|----------|-------------|
 | **`Points`** | Yes | Upstream node providing candidate positions. |
 
-**Output:** `{ Vector3 }` — terrain-snapped, filtered positions.
+**Output:** `{ Vector3 }` — terrain-snapped, filtered positions, all inside the volume.
 
 **Example `SlopeFilter` values:**
 
@@ -221,7 +256,7 @@ Each **`Output`** rule (branch) is normally placed independently, so a tree from
 
 **How it works:**
 
-- During a graph evaluation, an **occupancy store** tracks the circular footprint (center + **`Radius`**) of every placed instance.
+- During a graph evaluation — which covers every volume in a [group](#overlapping-volumes) — an **occupancy store** tracks the circular footprint (center + **`Radius`**) of every placed instance.
 - Rules **without** **`AvoidIntersections`** are placed immediately and always kept ("solid").
 - Rules **with** **`AvoidIntersections`** are **deferred**: their instances become *candidates*.
 - After **all** branches have been evaluated, candidates are resolved in one pass, in a fixed global order — **lowest** **`Priority`** number first (`0` = highest priority), ties broken by a deterministic spatial key. A candidate is kept if its footprint circle does not overlap any already-kept footprint; otherwise it is discarded.
@@ -230,7 +265,8 @@ Because resolution runs after the whole graph is evaluated and processes candida
 
 **Semantics:**
 
-- **Order-independent.** Marking the nodes is enough; you never need to reason about which branch runs first.
+- **Order-independent.** Marking the nodes is enough; you never need to reason about which branch, or which volume, runs first.
+- **Scoped to one biome definition.** The store covers all volumes in a group, but not other biomes. Two different definitions overlapping on the same ground can still intersect each other.
 - **Cross-branch only.** A rule's own instances (including cluster nodes) never reject one another, so intended clustering is preserved.
 - **Marked yields to unmarked.** An **`AvoidIntersections`** rule always avoids a non-avoiding rule (the latter is placed unconditionally).
 - **`Priority` decides contested space.** When two avoiding rules compete for the same spot, the **lower** **`Priority`** number is kept (`0` is the highest priority). Equal priority is resolved by a stable spatial tiebreak (still deterministic).
@@ -252,8 +288,8 @@ Both rules avoid each other regardless of evaluation order. Where a tree and a b
 
 | Tag | Applied to | Effect |
 |-----|------------|--------|
-| **`ScatterGraphVolume`** | `Part` | Volume evaluated by the plugin. |
-| **`ExclusionVolume`** | `Part` | Points inside this part's axis-aligned bounds (in the part's object space) are removed. Applied after upstream evaluation in **`ScatterPointsAroundPoints`**, **`SnapPointsToTerrain`**, and **`PlaceGeometryOnPoints`**. |
+| **`ScatterGraphVolume`** | `BasePart` | Volume evaluated by the plugin. Any [shape](#volume-shapes). Volumes sharing a biome definition are [unioned](#overlapping-volumes). |
+| **`ExclusionVolume`** | `BasePart` | Points inside this part are removed, using the part's actual [shape](#volume-shapes) and orientation. Applied after upstream evaluation in **`ScatterPointsAroundPoints`**, **`SnapPointsToTerrain`**, and **`PlaceGeometryOnPoints`**. |
 | **`NoTint`** | `MeshPart` | Skips color tinting from **`ColorRange`** on that part. |
 
 ---
@@ -290,7 +326,9 @@ Both rules avoid each other regardless of evaluation order. Where a tree and a b
 
 | Path | Role |
 |------|------|
-| `src/shared/ScatterGraph/ScatterGraph.client.lua` | Plugin entry; volume iteration, node registry, evaluation loop |
+| `src/shared/ScatterGraph/ScatterGraph.client.lua` | Plugin entry; volume grouping, node registry, evaluation loop |
 | `src/shared/ScatterGraph/ScatterGraphHelpers.luau` | Terrain snap, clustering, placement, exclusion zones |
+| `src/shared/ScatterGraph/VolumeShape.luau` | Per-shape volume geometry: containment, footprint, and raycast extent for every part shape |
+| `src/shared/ScatterGraph/VolumeGroup.luau` | The volumes sharing one biome definition, queried as a single unioned region |
 | `src/shared/ScatterGraph/OccupancyStore.luau` | Spatial hash of placed footprint circles (center + `Radius`) for cross-branch intersection avoidance |
 | `src/shared/ScatterGraph/Nodes/` | Per-node evaluation logic |

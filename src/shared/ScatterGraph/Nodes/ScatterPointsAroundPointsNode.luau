@@ -5,7 +5,7 @@ local ScatterPointsAroundPointsNode = GraphNode:new()
 ScatterPointsAroundPointsNode.name = "ScatterPointsAroundPointsNode"
 ScatterPointsAroundPointsNode._type = "ScatterPointsAroundPointsNode"
 
-function ScatterPointsAroundPointsNode:evaluate(volume, terrain, ctx)
+function ScatterPointsAroundPointsNode:evaluate(volumes, terrain, ctx)
 	local n = ctx.node
 
 	local seed = n:GetAttribute("Seed")
@@ -22,7 +22,7 @@ function ScatterPointsAroundPointsNode:evaluate(volume, terrain, ctx)
 			if wire.Value == nil then
 				warn("missing Value in ObjectValue wire " .. wire.Name)
 			end
-			local newPoints = ctx.evaluateNode(wire.Value, volume, terrain, ctx.debugString)
+			local newPoints = ctx.evaluateNode(wire.Value, volumes, terrain, ctx.debugString)
 			for _, p in newPoints do
 				table.insert(points, p)
 			end
@@ -30,7 +30,7 @@ function ScatterPointsAroundPointsNode:evaluate(volume, terrain, ctx)
 	end
 
 	points = Helpers.excludePoints(points, ctx.exclusionFunctions)
-	return Helpers.scatterPointsAroundPoints(volume, terrain, seed, points, count, innerRadius, outerRadius)
+	return Helpers.scatterPointsAroundPoints(volumes, terrain, seed, points, count, innerRadius, outerRadius)
 end
 
 return ScatterPointsAroundPointsNode

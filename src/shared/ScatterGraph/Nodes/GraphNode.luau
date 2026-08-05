@@ -7,7 +7,7 @@ function GraphNode:new(o)
     return o
 end
 
-function GraphNode:evaluate(volume, terrain, ctx)
+function GraphNode:evaluate(volumes, terrain, ctx)
     print("Evaluating node "..self.name.." of type "..self._type)
 end
 

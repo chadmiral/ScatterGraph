@@ -4,7 +4,7 @@ local OutputNode = GraphNode:new()
 OutputNode.name = "OutputNode"
 OutputNode._type = "OutputNode"
 
-function OutputNode:evaluate(volume, terrain, ctx)
+function OutputNode:evaluate(volumes, terrain, ctx)
 	local n = ctx.node
 	local debugString = ctx.debugString
 	-- Branch order does not affect placement results: intersection avoidance is
@@ -15,7 +15,7 @@ function OutputNode:evaluate(volume, terrain, ctx)
 			if wire.Value == nil then
 				warn("missing value in OutputNode wire " .. wire.Name)
 			end
-			ctx.evaluateNode(wire.Value, volume, terrain, debugString)
+			ctx.evaluateNode(wire.Value, volumes, terrain, debugString)
 		end
 	end
 	return nil

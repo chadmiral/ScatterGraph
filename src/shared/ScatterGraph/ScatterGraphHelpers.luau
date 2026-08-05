@@ -1,5 +1,7 @@
 local CollectionService = game:GetService("CollectionService")
 
+local VolumeShape = require(script.Parent:WaitForChild("VolumeShape"))
+
 local M = {}
 
 function M.evalNumberSequence(sequence: NumberSequence, time: number)
@@ -40,16 +42,22 @@ function M.evalColorSequence(sequence: ColorSequence, time: number)
 	end
 end
 
-function M.snapPointsToTerrain(volume, terrain, points, materialFilter, slopeDensityCurve)
+function M.snapPointsToTerrain(volumes, terrain, points, materialFilter, slopeDensityCurve)
 	local raycastResults = {}
 
 	local params = RaycastParams.new()
 	params.FilterType = Enum.RaycastFilterType.Include
 	params.FilterDescendantsInstances = { workspace.Terrain }
 
+	-- Rays span the group's world-space Y extent (which is taller than Size.Y
+	-- once a volume is rotated); the containment test below is what actually
+	-- confines hits to the volumes' shapes.
+	local rayOriginY, rayLength = volumes:verticalBounds()
+	local insideVolume = volumes:containsPointFunction()
+
 	for i, point in pairs(points) do
-		local rayOrigin = Vector3.new(point.X, volume.CFrame.Position.Y + volume.Size.Y * 0.5, point.Z)
-		local rayDir = Vector3.new(0, -volume.Size.Y)
+		local rayOrigin = Vector3.new(point.X, rayOriginY, point.Z)
+		local rayDir = Vector3.new(0, -rayLength, 0)
 		local raycastResult = workspace:Raycast(rayOrigin, rayDir, params)
 		-- Index by i (not table.insert): a missed ray returns nil, and
 		-- table.insert(t, nil) is a silent no-op that would shift every later
@@ -71,7 +79,7 @@ function M.snapPointsToTerrain(volume, terrain, points, materialFilter, slopeDen
 	end
 
 	for i = 1, #points do
-		if raycastResults[i] ~= nil then
+		if raycastResults[i] ~= nil and insideVolume(points[i]) then
 			local dp = raycastResults[i].Normal:Dot(Vector3.new(0.0, 1.0, 0.0))
 			local terrainSlope = math.clamp(1.0 - dp, 0.0, 1.0)
 
@@ -89,13 +97,17 @@ function M.snapPointsToTerrain(volume, terrain, points, materialFilter, slopeDen
 	return filteredPoints, raycastResults
 end
 
-function M.scatterPointsAroundPoints(volume, terrain, seed, points, count, innerRadius, outerRadius)
+function M.scatterPointsAroundPoints(volumes, terrain, seed, points, count, innerRadius, outerRadius)
 	math.randomseed(seed)
 
 	if outerRadius < innerRadius then
 		warn("Invalid inner & outer radii. Skipping")
 		return
 	end
+
+	-- Cluster offsets can push a point past the edge of a volume, so they are
+	-- clipped to the group's footprint the same way the source scatter is.
+	local insideFootprint = volumes:footprintFunction()
 
 	local newPoints = {}
 	for _, p in pairs(points) do
@@ -108,11 +120,14 @@ function M.scatterPointsAroundPoints(volume, terrain, seed, points, count, inner
 				d = newP.Magnitude
 			end
 
-			table.insert(newPoints, p + newP)
+			local clusterPoint = p + newP
+			if insideFootprint(clusterPoint.X, clusterPoint.Z) then
+				table.insert(newPoints, clusterPoint)
+			end
 		end
 	end
 
-	print("Scattering " .. #newPoints .. " children in volume " .. volume.Name)
+	print("Scattering " .. #newPoints .. " children in " .. volumes.name)
 
 	return newPoints
 end
@@ -198,30 +213,8 @@ function M.placeGeoOnPoints(
 	return instances
 end
 
-function M.getExclusionFunction(volume: Part): (Vector3) -> boolean
-	local volumeCFrame = volume.CFrame
-	local objectSpaceCFrame = volumeCFrame:ToObjectSpace(volumeCFrame)
-
-	local halfX = volume.Size.X / 2
-	local halfY = volume.Size.Y / 2
-	local halfZ = volume.Size.Z / 2
-
-	local minX = objectSpaceCFrame.Position.X - halfX
-	local maxX = objectSpaceCFrame.Position.X + halfX
-	local minY = objectSpaceCFrame.Position.Y - halfY
-	local maxY = objectSpaceCFrame.Position.Y + halfY
-	local minZ = objectSpaceCFrame.Position.Z - halfZ
-	local maxZ = objectSpaceCFrame.Position.Z + halfZ
-	return function(point: Vector3)
-		local transformedPoint = volumeCFrame:PointToObjectSpace(point)
-
-		return minX <= transformedPoint.X
-			and transformedPoint.X <= maxX
-			and minY <= transformedPoint.Y
-			and transformedPoint.Y <= maxY
-			and minZ <= transformedPoint.Z
-			and transformedPoint.Z <= maxZ
-	end
+function M.getExclusionFunction(volume: BasePart): (Vector3) -> boolean
+	return VolumeShape.containsPointFunction(volume)
 end
 
 function M.exclusionZoneFunctions(): { (Vector3) -> boolean }
@@ -229,7 +222,7 @@ function M.exclusionZoneFunctions(): { (Vector3) -> boolean }
 	local exclusionZoneFunctions = {}
 
 	for _, volume in exclusionVolumes do
-		if not volume:IsA("Part") then
+		if not volume:IsA("BasePart") then
 			continue
 		end
 

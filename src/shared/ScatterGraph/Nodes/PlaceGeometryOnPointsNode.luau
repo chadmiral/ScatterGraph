@@ -5,7 +5,7 @@ local PlaceGeometryOnPointsNode = GraphNode:new()
 PlaceGeometryOnPointsNode.name = "PlaceGeometryOnPointsNode"
 PlaceGeometryOnPointsNode._type = "PlaceGeometryOnPointsNode"
 
-function PlaceGeometryOnPointsNode:evaluate(volume, terrain, ctx)
+function PlaceGeometryOnPointsNode:evaluate(volumes, terrain, ctx)
 	local n = ctx.node
 	local insertService = ctx.insertService
 
@@ -30,7 +30,7 @@ function PlaceGeometryOnPointsNode:evaluate(volume, terrain, ctx)
 				if wire.Value == nil then
 					warn("Missing Value in ObjectValue wire " .. wire.Name)
 				end
-				local newPoints = ctx.evaluateNode(wire.Value, volume, terrain, ctx.debugString)
+				local newPoints = ctx.evaluateNode(wire.Value, volumes, terrain, ctx.debugString)
 				for _, p in newPoints do
 					table.insert(points, p)
 				end
