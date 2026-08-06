@@ -19,14 +19,16 @@
 	Asset editor reads to name the geometry a rule places, so a window that
 	followed it would empty itself in the middle of that gesture.
 
-	The ribbon along the top edits the graph: it deletes the selected rule, or
-	adds one of the three chains that cover almost every rule in practice. Every
-	edit goes through ChangeHistoryService, so ctrl-Z undoes it like any other
-	Studio change.
+	The two ribbon rows along the top edit what the panes below them show. The
+	upper row makes and deletes whole graphs; the lower one deletes the selected
+	rule or adds one of the three chains that cover almost every rule in
+	practice. Every edit goes through ChangeHistoryService, so ctrl-Z undoes it
+	like any other Studio change.
 ]]
 
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local CollectionService = game:GetService("CollectionService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Selection = game:GetService("Selection")
 
 local AttributeSchema = require(script.Parent:WaitForChild("AttributeSchema"))
@@ -43,6 +45,10 @@ local BUTTON_HEIGHT = 22
 local GRAPH_COLUMN = 0.22
 local OUTPUT_COLUMN = 0.26
 local NAME_COLUMN = 0.45
+local TOOLTIP_WIDTH = 280
+-- Long enough that sweeping the pointer down the rows does not flash a tooltip
+-- at every one of them on the way past.
+local TOOLTIP_DELAY = 0.4
 
 local function color(guideColor: Enum.StudioStyleGuideColor, modifier: Enum.StudioStyleGuideModifier?): Color3
 	return settings().Studio.Theme:GetColor(guideColor, modifier)
@@ -98,10 +104,14 @@ end
 -- Where a graph can be kept: the storage services by convention, and Workspace
 -- because a graph is often left next to the volumes that use it.
 local SEARCH_ROOTS = {
-	game:GetService("ReplicatedStorage"),
+	ReplicatedStorage,
 	game:GetService("ServerStorage"),
 	workspace,
 }
+
+-- Where a graph goes when this window makes one, and the location the rest of
+-- the system expects to find graphs in.
+local GRAPH_FOLDER = "ScatterGraphs"
 
 -- Skipped by the search below. After an evaluation this folder holds every
 -- placed clone in the place, which can be more instances than everything else
@@ -154,9 +164,11 @@ local function collectGraphs(): { Instance }
 	end
 
 	-- A volume may point at a graph kept somewhere the search does not reach.
+	-- Its reference outlives a deletion, though, so a graph reached this way has
+	-- to be checked for still being in the place at all.
 	for _, volume in CollectionService:GetTagged("ScatterGraphVolume") do
 		local graph = findGraphFromVolume(volume)
-		if graph ~= nil and isGraph(graph) and not found[graph] then
+		if graph ~= nil and isGraph(graph) and graph:IsDescendantOf(game) and not found[graph] then
 			found[graph] = true
 			table.insert(graphs, graph)
 		end
@@ -319,6 +331,42 @@ local function findOutputRegistry(graph: Instance): Instance
 	return registry
 end
 
+-- Makes the graph folder if the place has never held a graph before, which is
+-- what the evaluator does with it too.
+local function findGraphFolder(): Instance
+	local folder = ReplicatedStorage:FindFirstChild(GRAPH_FOLDER)
+	if folder ~= nil then
+		return folder
+	end
+
+	folder = Instance.new("Folder")
+	folder.Name = GRAPH_FOLDER
+	folder.Parent = ReplicatedStorage
+	return folder
+end
+
+local function makeGraph(): Instance
+	local container = findGraphFolder()
+
+	local name = "ScatterGraph"
+	local suffix = 1
+	while container:FindFirstChild(name) ~= nil do
+		suffix += 1
+		name = "ScatterGraph" .. suffix
+	end
+
+	local graph = Instance.new("Model")
+	graph.Name = name
+	graph:SetAttribute("NodeType", "ScatterGraph")
+	-- Made now rather than with the first rule so the graph is a complete,
+	-- evaluable one from the moment it exists -- an empty registry places
+	-- nothing, but a missing one is a graph the evaluator cannot read.
+	findOutputRegistry(graph)
+	graph.Parent = container
+
+	return graph
+end
+
 -- Rule names have to be unique twice over: the rule folder sits under the graph
 -- root and the registry entry under Output, and the two share the name.
 local function uniqueRuleName(graph: Instance, registry: Instance, base: string): string
@@ -381,19 +429,22 @@ local function deleteRule(graph: Instance, output: ObjectValue, allOutputs: { Ob
 	local doomed = {}
 	collectUpstreamNodes(output.Value, {}, doomed)
 
+	-- Unparented rather than destroyed, here and below. Destroy locks the Parent
+	-- property, so the undo that follows cannot put the instance back and fails
+	-- with a warning instead. Deleting in the Explorer unparents too.
 	local containers = {}
 	for _, node in doomed do
 		if not stillNeeded[node] then
 			containers[node.Parent] = true
-			node:Destroy()
+			node.Parent = nil
 		end
 	end
 
-	output:Destroy()
+	output.Parent = nil
 
 	for container in containers do
 		if container ~= graph and container.Parent ~= nil and #container:GetChildren() == 0 then
-			container:Destroy()
+			container.Parent = nil
 		end
 	end
 end
@@ -442,12 +493,17 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 	-- undo, so the detail pane listens to the nodes it is showing to stay
 	-- current.
 	local detailConnections: { RBXScriptConnection } = {}
-	-- Ribbon buttons act on the selected graph or the selected rule, so they are
-	-- greyed out when there is none. Rebuilt with the rest of the interface.
+	-- Most ribbon buttons act on the selected graph or the selected rule, so
+	-- they are greyed out when there is none; each remembers which it needs.
+	-- Rebuilt with the rest of the interface.
 	local ribbonButtons = {}
 	-- The open dropdown list, if any. Only one can be open at a time, and it
 	-- closes whenever the pane it belongs to is rebuilt.
 	local dropdown = nil
+	-- The visible tooltip, and a counter that tells a delayed one whether the
+	-- pointer is still where it was when the wait started.
+	local tooltip = nil
+	local tooltipToken = 0
 
 	-- Rebuilds the graph list and everything under it; rebuilds the rule and
 	-- detail panes for the graph already chosen.
@@ -482,7 +538,88 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 		return label
 	end
 
+	local function hideTooltip()
+		-- Also cancels any tooltip still waiting out its delay.
+		tooltipToken += 1
+
+		if tooltip ~= nil then
+			tooltip:Destroy()
+			tooltip = nil
+		end
+	end
+
+	-- Roblox has no tooltip, so this is a panel pinned to the row that asked for
+	-- it. It sits below the row rather than under the pointer: a frame beneath
+	-- the pointer takes the hover from the row that raised it, and the two then
+	-- flicker against each other.
+	local function showTooltip(anchor: GuiObject, text: string)
+		hideTooltip()
+
+		local frame = Instance.new("Frame")
+		frame.Size = UDim2.fromOffset(TOOLTIP_WIDTH, 0)
+		frame.AutomaticSize = Enum.AutomaticSize.Y
+		frame.BackgroundColor3 = color(Enum.StudioStyleGuideColor.Titlebar)
+		frame.BorderColor3 = color(Enum.StudioStyleGuideColor.Border)
+		frame.ZIndex = 20
+		tooltip = frame
+
+		local padding = Instance.new("UIPadding")
+		padding.PaddingLeft = UDim.new(0, PADDING)
+		padding.PaddingRight = UDim.new(0, PADDING)
+		padding.PaddingTop = UDim.new(0, 4)
+		padding.PaddingBottom = UDim.new(0, 4)
+		padding.Parent = frame
+
+		local label = makeLabel(text, color(Enum.StudioStyleGuideColor.MainText), false)
+		label.Size = UDim2.new(1, 0, 0, 0)
+		label.AutomaticSize = Enum.AutomaticSize.Y
+		label.TextTruncate = Enum.TextTruncate.None
+		label.TextWrapped = true
+		label.TextYAlignment = Enum.TextYAlignment.Top
+		label.ZIndex = 20
+		label.Parent = frame
+
+		local offset = anchor.AbsolutePosition - root.AbsolutePosition
+		local below = offset.Y + anchor.AbsoluteSize.Y + 2
+		local x = math.clamp(offset.X, PADDING, math.max(PADDING, root.AbsoluteSize.X - TOOLTIP_WIDTH - PADDING))
+
+		-- The height is only known once the text has been laid out, so the
+		-- decision to hang the panel below the row or above it is made again
+		-- whenever that height lands.
+		local function place()
+			local height = frame.AbsoluteSize.Y
+			frame.Position = UDim2.fromOffset(
+				x,
+				if below + height <= root.AbsoluteSize.Y then below else math.max(0, offset.Y - height - 2)
+			)
+		end
+
+		-- Placed before it is shown, so it never appears in the corner for a
+		-- frame on the way to where it belongs.
+		place()
+		frame.Parent = root
+		frame:GetPropertyChangedSignal("AbsoluteSize"):Connect(place)
+	end
+
+	-- Waits out the hover delay before showing, and does nothing if the pointer
+	-- has moved on or the row has been rebuilt in the meantime.
+	local function watchForTooltip(anchor: GuiObject, text: string)
+		anchor.MouseEnter:Connect(function()
+			tooltipToken += 1
+			local token = tooltipToken
+
+			task.delay(TOOLTIP_DELAY, function()
+				if token == tooltipToken and anchor.Parent ~= nil then
+					showTooltip(anchor, text)
+				end
+			end)
+		end)
+
+		anchor.MouseLeave:Connect(hideTooltip)
+	end
+
 	local function clearDetail()
+		hideTooltip()
 		closeDropdown()
 
 		for _, connection in detailConnections do
@@ -873,6 +1010,13 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 		nameLabel.Position = UDim2.fromOffset(PADDING, 0)
 		nameLabel.Parent = row
 
+		-- Hung off the name rather than the whole row: the editors are their own
+		-- input targets, and a tooltip that came and went as the pointer crossed
+		-- into a field would be a distraction while typing.
+		if descriptor.description ~= nil then
+			watchForTooltip(nameLabel, descriptor.description)
+		end
+
 		local editor = makeEditor(node, descriptor, readDescriptorValue(node, descriptor))
 		if superseded then
 			local box = editor:FindFirstChildOfClass("TextBox")
@@ -922,6 +1066,9 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 		section.Activated:Connect(function()
 			Selection:Set({ node })
 		end)
+
+		watchForTooltip(section, "Click to select this node in the Explorer, where the Properties pane shows "
+			.. "what this window leaves out.")
 	end
 
 	local function showOutput(output: ObjectValue?)
@@ -1067,7 +1214,45 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 		refreshRules()
 	end
 
-	local function addRibbonButton(icon: string, label: string, needsOutput: boolean, activate: () -> ())
+	local function createGraph()
+		local graph
+		local made = recorded("New ScatterGraph", function()
+			graph = makeGraph()
+		end)
+
+		if not made then
+			return
+		end
+
+		currentGraph = graph
+		selectedOutputName = nil
+		-- Reveals it in the Explorer, which is where it gets its real name: a
+		-- graph is picked out by name in every volume that uses it.
+		Selection:Set({ graph })
+		refresh()
+	end
+
+	local function deleteCurrentGraph()
+		local graph = activeGraph()
+		if graph == nil then
+			return
+		end
+
+		recorded("Delete ScatterGraph", function()
+			-- Unparented rather than destroyed, so ctrl-Z can put it back. See
+			-- deleteRule.
+			graph.Parent = nil
+		end)
+
+		currentGraph = nil
+		selectedOutputName = nil
+		refresh()
+	end
+
+	-- spec: { icon, label, tooltip, requires, activate }, where requires is
+	-- "none", "graph" or "output" -- what has to be selected for the button to
+	-- do anything.
+	local function addRibbonButton(spec)
 		local button = Instance.new("TextButton")
 		button.Size = UDim2.new(0, 0, 0, BUTTON_HEIGHT)
 		button.AutomaticSize = Enum.AutomaticSize.X
@@ -1077,7 +1262,7 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 		button.Font = Enum.Font.SourceSans
 		button.TextSize = 14
 		button.TextColor3 = color(Enum.StudioStyleGuideColor.ButtonText)
-		button.Text = icon .. "  " .. label
+		button.Text = spec.icon .. "  " .. spec.label
 
 		local padding = Instance.new("UIPadding")
 		padding.PaddingLeft = UDim.new(0, PADDING)
@@ -1086,15 +1271,19 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 
 		-- The handlers re-resolve what they act on, so a click that slips
 		-- through while the button looks disabled still does nothing.
-		button.Activated:Connect(activate)
+		button.Activated:Connect(spec.activate)
+		watchForTooltip(button, spec.tooltip)
 
-		table.insert(ribbonButtons, { button = button, needsOutput = needsOutput })
+		table.insert(ribbonButtons, { button = button, requires = spec.requires })
 		return button
 	end
 
 	local function updateRibbon(hasGraph: boolean, hasOutput: boolean)
 		for _, entry in ribbonButtons do
-			local enabled = if entry.needsOutput then hasOutput else hasGraph
+			local enabled = if entry.requires == "output"
+				then hasOutput
+				elseif entry.requires == "graph" then hasGraph
+				else true
 			local modifier = if enabled then nil else Enum.StudioStyleGuideModifier.Disabled
 
 			entry.button.Active = enabled
@@ -1145,45 +1334,110 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 			return header, scroll
 		end
 
-		local ribbon = Instance.new("Frame")
-		ribbon.Size = UDim2.new(1, 0, 0, RIBBON_HEIGHT)
-		ribbon.BackgroundColor3 = color(Enum.StudioStyleGuideColor.Titlebar)
-		ribbon.BorderSizePixel = 0
-		ribbon.Parent = rootFrame
+		local function makeEdge(y: number)
+			local edge = Instance.new("Frame")
+			edge.Position = UDim2.fromOffset(0, y)
+			edge.Size = UDim2.new(1, 0, 0, 1)
+			edge.BackgroundColor3 = color(Enum.StudioStyleGuideColor.Border)
+			edge.BorderSizePixel = 0
+			edge.Parent = rootFrame
+		end
 
-		local ribbonLayout = Instance.new("UIListLayout")
-		ribbonLayout.FillDirection = Enum.FillDirection.Horizontal
-		ribbonLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-		ribbonLayout.SortOrder = Enum.SortOrder.LayoutOrder
-		ribbonLayout.Padding = UDim.new(0, 4)
-		ribbonLayout.Parent = ribbon
+		local function makeRibbonRow(y: number): Frame
+			local ribbon = Instance.new("Frame")
+			ribbon.Position = UDim2.fromOffset(0, y)
+			ribbon.Size = UDim2.new(1, 0, 0, RIBBON_HEIGHT)
+			ribbon.BackgroundColor3 = color(Enum.StudioStyleGuideColor.Titlebar)
+			ribbon.BorderSizePixel = 0
+			ribbon.Parent = rootFrame
 
-		local ribbonPadding = Instance.new("UIPadding")
-		ribbonPadding.PaddingLeft = UDim.new(0, PADDING)
-		ribbonPadding.Parent = ribbon
+			local layout = Instance.new("UIListLayout")
+			layout.FillDirection = Enum.FillDirection.Horizontal
+			layout.VerticalAlignment = Enum.VerticalAlignment.Center
+			layout.SortOrder = Enum.SortOrder.LayoutOrder
+			layout.Padding = UDim.new(0, 4)
+			layout.Parent = ribbon
+
+			local padding = Instance.new("UIPadding")
+			padding.PaddingLeft = UDim.new(0, PADDING)
+			padding.Parent = ribbon
+
+			return ribbon
+		end
+
+		-- Two rows, because the buttons act at two different scales: the top one
+		-- makes and unmakes whole graphs, the one below it edits the rules
+		-- inside the graph the top row left selected.
+		local graphRibbon = makeRibbonRow(0)
+		makeEdge(RIBBON_HEIGHT)
+		local ruleRibbon = makeRibbonRow(RIBBON_HEIGHT + 1)
 
 		-- Icons are emoji rather than rbxassetid images: the plugin ships no art,
 		-- and the emoji font is the one glyph source that is always present.
+		-- Chosen from the set Studio itself ships an emoji for, and from the
+		-- solid ones within that: line-drawn glyphs like the spider web lose
+		-- their shape at this size.
 		table.clear(ribbonButtons)
-		addRibbonButton("\u{274C}", "Delete", true, deleteSelectedRule).Parent = ribbon
-		addRibbonButton("\u{1F332}", "Terrain Prop", false, function()
-			addTemplateRule(RULE_TEMPLATES.terrainProp)
-		end).Parent = ribbon
-		addRibbonButton("\u{1F33F}", "Cluster", false, function()
-			addTemplateRule(RULE_TEMPLATES.cluster)
-		end).Parent = ribbon
-		addRibbonButton("\u{1F426}", "Floating Prop", false, function()
-			addTemplateRule(RULE_TEMPLATES.floatingProp)
-		end).Parent = ribbon
+		addRibbonButton({
+			icon = "\u{1F517}",
+			label = "New Graph",
+			tooltip = "Adds an empty graph to ReplicatedStorage.ScatterGraphs and selects it here and in the "
+				.. "Explorer. Rename it there: a scatter volume names the graph it uses.",
+			requires = "none",
+			activate = createGraph,
+		}).Parent = graphRibbon
+		addRibbonButton({
+			icon = "\u{274C}",
+			label = "Delete Graph",
+			tooltip = "Deletes the selected graph and every rule in it. Volumes pointing at it place nothing "
+				.. "until they are pointed somewhere else. Undo brings it back.",
+			requires = "graph",
+			activate = deleteCurrentGraph,
+		}).Parent = graphRibbon
 
-		local ribbonEdge = Instance.new("Frame")
-		ribbonEdge.Position = UDim2.fromOffset(0, RIBBON_HEIGHT)
-		ribbonEdge.Size = UDim2.new(1, 0, 0, 1)
-		ribbonEdge.BackgroundColor3 = color(Enum.StudioStyleGuideColor.Border)
-		ribbonEdge.BorderSizePixel = 0
-		ribbonEdge.Parent = rootFrame
+		addRibbonButton({
+			icon = "\u{274C}",
+			label = "Delete",
+			tooltip = "Deletes the selected rule: its Output entry and the nodes feeding it. A node another "
+				.. "rule also feeds from is left alone.",
+			requires = "output",
+			activate = deleteSelectedRule,
+		}).Parent = ruleRibbon
+		addRibbonButton({
+			icon = "\u{1F332}",
+			label = "Terrain Prop",
+			tooltip = "Adds a rule that scatters points, drops them onto the terrain and places one asset at "
+				.. "each: ScatterPoints, SnapPointsToTerrain, PlaceAssetOnPoints. Set its Asset to finish it.",
+			requires = "graph",
+			activate = function()
+				addTemplateRule(RULE_TEMPLATES.terrainProp)
+			end,
+		}).Parent = ruleRibbon
+		addRibbonButton({
+			icon = "\u{1F33F}",
+			label = "Cluster",
+			tooltip = "Adds a rule that scatters points, spreads a clump around each one and drops those onto "
+				.. "the terrain: ScatterPoints, ScatterPointsAroundPoints, SnapPointsToTerrain, "
+				.. "PlaceAssetOnPoints. Set its Asset to finish it.",
+			requires = "graph",
+			activate = function()
+				addTemplateRule(RULE_TEMPLATES.cluster)
+			end,
+		}).Parent = ruleRibbon
+		addRibbonButton({
+			icon = "\u{1F426}",
+			label = "Floating Prop",
+			tooltip = "Adds a rule that places an asset at each scattered point without consulting the "
+				.. "terrain, for anything that hangs in the air: ScatterPoints, PlaceAssetOnPoints. Set its "
+				.. "Asset to finish it.",
+			requires = "graph",
+			activate = function()
+				addTemplateRule(RULE_TEMPLATES.floatingProp)
+			end,
+		}).Parent = ruleRibbon
 
-		local paneTop = RIBBON_HEIGHT + 1
+		local paneTop = (RIBBON_HEIGHT + 1) * 2
+		makeEdge(paneTop - 1)
 
 		local function makeDivider(x: number)
 			local divider = Instance.new("Frame")

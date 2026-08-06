@@ -42,6 +42,9 @@ export type Descriptor = {
 	-- Name of a wire that takes precedence over this attribute at evaluation
 	-- time, so the row can say when it is being ignored.
 	supersededBy: string?,
+	-- What the Rules window shows on hover. Condensed from the node reference in
+	-- ScatterGraph-Rules.md, which stays the fuller account of the two.
+	description: string?,
 }
 
 -- RotationType is matched literally in ScatterGraphHelpers: anything that is
@@ -51,45 +54,144 @@ local ROTATION_TYPES = { "None", "UpAxis", "Random" }
 
 local SCHEMA: { [string]: { Descriptor } } = {
 	ScatterPoints = {
-		{ name = "Seed", kind = "number", integer = true, default = 1 },
-		{ name = "Spacing", kind = "number", default = 40 },
+		{
+			name = "Seed",
+			kind = "number",
+			integer = true,
+			default = 1,
+			description = "Random seed. Sets the jitter within each grid cell, and seeds the stream that "
+				.. "downstream nodes draw from for scale, rotation and the slope filter.",
+		},
+		{
+			name = "Spacing",
+			kind = "number",
+			default = 40,
+			description = "Target minimum distance between points, in studs. One point is generated per "
+				.. "grid cell, and the cell is Spacing / sqrt(2) across.",
+		},
 	},
 
 	ScatterPointsAroundPoints = {
-		{ name = "Seed", kind = "number", integer = true, default = 1 },
-		{ name = "InnerRadius", kind = "number", default = 0 },
-		{ name = "OuterRadius", kind = "number", default = 8 },
-		{ name = "Count", kind = "number", integer = true, default = 10 },
+		{
+			name = "Seed",
+			kind = "number",
+			integer = true,
+			default = 1,
+			description = "Random seed for the cluster offsets.",
+		},
+		{
+			name = "InnerRadius",
+			kind = "number",
+			default = 0,
+			description = "Minimum horizontal distance from the seed point, in studs. Zero fills the disc "
+				.. "rather than leaving a hole in the middle of the cluster.",
+		},
+		{
+			name = "OuterRadius",
+			kind = "number",
+			default = 8,
+			description = "Maximum horizontal distance from the seed point, in studs. Must be at least "
+				.. "InnerRadius.",
+		},
+		{
+			name = "Count",
+			kind = "number",
+			integer = true,
+			default = 10,
+			description = "How many points to generate around each upstream point. Offsets that land "
+				.. "outside the volume are dropped, so clusters near an edge come out smaller.",
+		},
 	},
 
 	SnapPointsToTerrain = {
-		{ name = "MaterialFilter", kind = "string", default = "Water" },
-		{ name = "SlopeFilter", kind = "numberSequence", default = NumberSequence.new(1, 0) },
+		{
+			name = "MaterialFilter",
+			kind = "string",
+			default = "Water",
+			description = "Comma-separated list of terrain materials to reject, such as Water,Ice,Snow. "
+				.. "A point landing on one of them is discarded.",
+		},
+		{
+			name = "SlopeFilter",
+			kind = "numberSequence",
+			default = NumberSequence.new(1, 0),
+			description = "Maps terrain slope to the chance of keeping a point: time 0 is flat ground and "
+				.. "1 is vertical. NumberSequence.new(1, 0) is full density on the flat and none on a wall.",
+		},
 	},
 
 	PlaceGeometryOnPoints = {
 		-- The two ways to say what gets placed, listed in the order the node
 		-- resolves them: an in-scene template to clone wins over a published
 		-- asset to load.
-		{ name = "Asset", kind = "instance", source = "wire", wireNodeType = "Asset", optional = true },
-		{ name = "GeometryAssetID", kind = "number", integer = true, optional = true, supersededBy = "Asset" },
+		{
+			name = "Asset",
+			kind = "instance",
+			source = "wire",
+			wireNodeType = "Asset",
+			optional = true,
+			description = "The instance in the scene to clone at each point. Set from the Studio "
+				.. "selection. Takes precedence over GeometryAssetID.",
+		},
+		{
+			name = "GeometryAssetID",
+			kind = "number",
+			integer = true,
+			optional = true,
+			supersededBy = "Asset",
+			description = "Published asset to load and clone instead of an in-scene template; the first "
+				.. "child of the loaded asset is used. Ignored while Asset is set.",
+		},
 		{
 			name = "ScaleRange",
 			kind = "vector2",
 			optional = true,
 			components = { "Min", "Max" },
 			default = Vector2.new(1, 1),
+			description = "Uniform scale, sampled per instance between Min and Max. Left unset, every "
+				.. "instance is placed at its authored size.",
 		},
-		{ name = "RotationType", kind = "choice", optional = true, choices = ROTATION_TYPES },
+		{
+			name = "RotationType",
+			kind = "choice",
+			optional = true,
+			choices = ROTATION_TYPES,
+			description = "How each instance is turned. UpAxis is a random spin around world Y, which "
+				.. "suits anything that grows upright; Random turns on all three axes; None leaves the "
+				.. "placement as it comes.",
+		},
 		{
 			name = "ColorRange",
 			kind = "colorSequence",
 			optional = true,
 			default = ColorSequence.new(Color3.new(1, 1, 1)),
+			description = "Random tint across the mesh parts of each instance, sampled anywhere along the "
+				.. "sequence. A part tagged NoTint keeps its own colour.",
 		},
-		{ name = "AvoidIntersections", kind = "boolean", optional = true },
-		{ name = "Radius", kind = "number", optional = true, default = 5 },
-		{ name = "Priority", kind = "number", integer = true, optional = true, default = 0 },
+		{
+			name = "AvoidIntersections",
+			kind = "boolean",
+			optional = true,
+			description = "When set, an instance is dropped rather than placed where its footprint would "
+				.. "overlap one already kept -- including footprints from other rules and other volumes.",
+		},
+		{
+			name = "Radius",
+			kind = "number",
+			optional = true,
+			default = 5,
+			description = "The footprint used for that test: a horizontal circle in studs. Two placements "
+				.. "clash when their centres are closer than the sum of their radii.",
+		},
+		{
+			name = "Priority",
+			kind = "number",
+			integer = true,
+			optional = true,
+			default = 0,
+			description = "Which rule wins ground two of them contest: the lower number is kept, so 0 "
+				.. "outranks everything. Does nothing unless AvoidIntersections is set.",
+		},
 	},
 }
 
