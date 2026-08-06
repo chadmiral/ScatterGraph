@@ -13,15 +13,27 @@ local ScatterPointsAroundPointsNode = require(script.Parent.Nodes:WaitForChild("
 local Helpers = require(script.Parent:WaitForChild("ScatterGraphHelpers"))
 local OccupancyStore = require(script.Parent:WaitForChild("OccupancyStore"))
 local VolumeGroup = require(script.Parent:WaitForChild("VolumeGroup"))
+local RulesWindow = require(script.Parent:WaitForChild("RulesWindow"))
 
 local InstanceFolder = workspace:FindFirstChild("ScatterGraphInstances")
 
 
 local toolbar = plugin:CreateToolbar("ScatterGraph")
 
--- Add a toolbar button labeled "Empty Script"
-local newScriptButton = toolbar:CreateButton("EvaluateScatterGraph", "Evaluate the Scatter Graph", "rbxassetid://14978048121")
-local clearButton = toolbar:CreateButton("Clear Instances", "Clear all ScatterGraph Instances", "")
+-- A toolbar button takes an image, not a glyph. These are free public decals
+-- rather than anything uploaded for this plugin, so they can in principle be
+-- moderated away; the button falls back to no icon rather than breaking if that
+-- happens. Each id is the decal's underlying image, which is what the Icon
+-- property wants -- the decal id itself does not always resolve.
+local ICONS = {
+	evaluate = "rbxassetid://8772271242", -- pine tree, from decal 8772271280
+	clear = "rbxassetid://14002617467", -- trash can, from decal 14002617522
+	rules = "rbxassetid://76681380400497", -- pencil, from decal 128809752302807
+}
+
+local newScriptButton = toolbar:CreateButton("EvaluateScatterGraph", "Evaluate the Scatter Graph", ICONS.evaluate)
+local clearButton = toolbar:CreateButton("Clear Instances", "Clear all ScatterGraph Instances", ICONS.clear)
+local rulesButton = toolbar:CreateButton("Rules", "Browse and edit the rules of every ScatterGraph", ICONS.rules)
 --local brushButton = toolbar:CreateButton("Brush", "Enable Brush Mode", "")
 --local testButton = toolbar:CreateButton("Test", "Test Button", "")
 
@@ -187,6 +199,8 @@ end--]]
 
 newScriptButton.Click:Connect(onPluginButtonClicked)
 clearButton.Click:Connect(onClearButtonClicked)
+-- The Rules widget owns its own button: clicking it toggles the dock widget.
+RulesWindow.install(plugin, rulesButton)
 --brushButton.Click:Connect(onBrushButtonClicked)
 --testButton.Click:Connect(onTestButtonClicked)
 

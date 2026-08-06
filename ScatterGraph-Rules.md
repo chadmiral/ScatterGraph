@@ -328,6 +328,9 @@ Both rules avoid each other regardless of evaluation order. Where a tree and a b
 |------|------|
 | `src/shared/ScatterGraph/ScatterGraph.client.lua` | Plugin entry; volume grouping, node registry, evaluation loop |
 | `src/shared/ScatterGraph/ScatterGraphHelpers.luau` | Terrain snap, clustering, placement, exclusion zones |
+| `src/shared/ScatterGraph/RulesWindow.luau` | "Rules" dock widget: lists the place's graphs and the chosen graph's outputs, edits the attributes and Asset wire of the nodes feeding each one, and adds or deletes rules |
+| `src/shared/ScatterGraph/AttributeSchema.luau` | Which values each node type takes and which editor the Rules window gives each one |
+| `src/shared/ScatterGraph/SequenceEditor.luau` | Popout keypoint editor for the `SlopeFilter` and `ColorRange` sequences, with a colour picker for the latter |
 | `src/shared/ScatterGraph/VolumeShape.luau` | Per-shape volume geometry: containment, footprint, and raycast extent for every part shape |
 | `src/shared/ScatterGraph/VolumeGroup.luau` | The volumes sharing one biome definition, queried as a single unioned region |
 | `src/shared/ScatterGraph/OccupancyStore.luau` | Spatial hash of placed footprint circles (center + `Radius`) for cross-branch intersection avoidance |
