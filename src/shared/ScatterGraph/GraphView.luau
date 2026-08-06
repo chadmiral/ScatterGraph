@@ -28,9 +28,21 @@
 	the graph. A node dragged to a new place keeps it in a GraphPosition
 	attribute; a node that has never been dragged is laid out in columns by how
 	far it is from a source, which is a readable starting arrangement and costs
-	nothing to throw away. Nothing is written until something is dragged.
+	nothing to throw away. Rewiring the graph would work those columns out
+	again, so an edit to the wiring first writes down where the laid-out nodes
+	are: an author who cuts one wire asked for that wire to go, not for the rest
+	of the graph to rearrange itself around the gap.
+
+	Every position lands on a ten pixel grid, shown as dots twenty pixels apart
+	that double or halve as the zoom would otherwise crowd them or spread them
+	out. They are one repeating image rather than a frame apiece, since at that
+	spacing a frame apiece would be thousands of them. A dot always falls on a
+	multiple of ten graph pixels, whatever the zoom, so a node sits on one
+	rather than near one -- which is what the zoom moving between whole tenths
+	is in aid of.
 ]]
 
+local AssetService = game:GetService("AssetService")
 local UserInputService = game:GetService("UserInputService")
 
 local GraphUi = require(script.Parent:WaitForChild("GraphUi"))
@@ -61,12 +73,15 @@ local BREAK_SIZE = 10
 local COLUMN_GAP = 72
 local ROW_GAP = 24
 local MARGIN = 40
--- How far one notch of the wheel moves the zoom, and how far it is allowed to
--- go: far enough out to see a large graph whole, far enough in that a node's
--- text is still worth reading.
-local ZOOM_STEP = 1.1
-local ZOOM_MIN = 0.25
-local ZOOM_MAX = 2.5
+-- What one notch of the wheel steps between: far enough out to see a large graph
+-- whole, far enough in that a node's text is still worth reading.
+--
+-- Every stop is a whole tenth, which is what keeps ten graph pixels a whole
+-- number of screen pixels. Screen offsets are integers, so a zoom that made the
+-- spacing fractional would have the grid tiling round every step and drift away
+-- from the nodes across the canvas -- a tenth cannot.
+local ZOOM_STOPS = { 0.3, 0.4, 0.5, 0.6, 0.8, 1, 1.2, 1.5, 2, 2.5 }
+local ZOOM_DEFAULT = table.find(ZOOM_STOPS, 1) or 1
 
 -- A title bar is coloured by what its node does, so a chain reads at a glance:
 -- green makes points, teal derives more points from them, brown puts them on the
@@ -75,7 +90,7 @@ local ZOOM_MAX = 2.5
 -- not which part of the window it is.
 local TITLE_COLORS = {
 	ScatterPoints = Color3.fromRGB(62, 108, 74),
-	ScatterPointsAroundPoints = Color3.fromRGB(56, 102, 112),
+	ScatterPointsAroundPoints = Color3.fromRGB(86, 142, 154),
 	SnapPointsToTerrain = Color3.fromRGB(122, 88, 50),
 	PlaceGeometryOnPoints = Color3.fromRGB(78, 84, 134),
 	Output = Color3.fromRGB(84, 84, 92),
@@ -93,6 +108,19 @@ local TITLE_SELECTED_LIFT = 0.3
 local NODE_BORDER = Color3.fromRGB(158, 158, 158)
 -- Faint enough to read the nodes through the box being dragged over them.
 local MARQUEE_FILL = 0.85
+
+-- The canvas grid. Positions round to the snap, which is what makes a graph tidy
+-- itself; the dots are drawn twice as far apart, since one at every snap is
+-- denser than it needs to be to read the spacing off.
+local GRID_SNAP = 10
+local GRID_SPACING = 20
+local GRID_DOT = Color3.fromRGB(80, 80, 80)
+-- The band the dots are kept within on screen, by doubling the spacing when the
+-- zoom crowds them and halving it when the zoom spreads them out. Halving stops
+-- at the snap, so every dot stays somewhere a node can actually land. The band is
+-- more than twice as wide as it is deep, so the two never fight over a zoom.
+local GRID_MIN_SCREEN = 12
+local GRID_MAX_SCREEN = 44
 -- Share of the window the parameter panel takes.
 local PARAM_COLUMN = 0.32
 
@@ -140,6 +168,79 @@ end
 
 local function isOutput(node: Instance): boolean
 	return node:GetAttribute("NodeType") == "Output"
+end
+
+local function snapToGrid(point: Vector2): Vector2
+	return Vector2.new(
+		math.round(point.X / GRID_SNAP) * GRID_SNAP,
+		math.round(point.Y / GRID_SNAP) * GRID_SNAP
+	)
+end
+
+-- How far apart to draw the dots at a given zoom, in graph pixels: the spacing
+-- doubled until they are not on top of each other, then halved while they are
+-- further apart than they need to be. Every step is a multiple or a factor of the
+-- snap, so a dot always marks somewhere a node can land.
+local function gridSpacingFor(zoom: number): number
+	local spacing = GRID_SPACING
+
+	while spacing * zoom < GRID_MIN_SCREEN do
+		spacing *= 2
+	end
+
+	while spacing > GRID_SNAP and spacing * zoom > GRID_MAX_SCREEN do
+		spacing /= 2
+	end
+
+	return spacing
+end
+
+-- One tile of the grid: a single dot in the corner of an otherwise empty square,
+-- which an ImageLabel repeats across the canvas. Drawn here rather than uploaded,
+-- so the plugin does not depend on an asset that could be moderated away.
+--
+-- The square is as many pixels across as the tile is drawn on screen, which is
+-- what keeps the dot a single pixel however far the canvas is zoomed. The zoom
+-- moves between a handful of sizes, so each is kept once it is made.
+local gridTiles: { [number]: Content } = {}
+local gridTileImages = {}
+local gridTilesFailed = false
+
+local function gridTile(size: number): Content?
+	if gridTilesFailed then
+		return nil
+	end
+
+	if gridTiles[size] ~= nil then
+		return gridTiles[size]
+	end
+
+	local ok, err = pcall(function()
+		local image = AssetService:CreateEditableImage({ Size = Vector2.new(size, size) })
+
+		-- Every byte starts at zero, which is a transparent square; the dot is
+		-- the one pixel written over it.
+		local pixels = buffer.create(size * size * 4)
+		buffer.writeu8(pixels, 0, math.round(GRID_DOT.R * 255))
+		buffer.writeu8(pixels, 1, math.round(GRID_DOT.G * 255))
+		buffer.writeu8(pixels, 2, math.round(GRID_DOT.B * 255))
+		buffer.writeu8(pixels, 3, 255)
+
+		image:WritePixelsBuffer(Vector2.zero, image.Size, pixels)
+
+		-- Held onto beyond the Content, which is a handle rather than a copy.
+		gridTileImages[size] = image
+		gridTiles[size] = Content.fromObject(image)
+	end)
+
+	if not ok then
+		-- The snapping is the half that matters; without the tiles the canvas
+		-- simply has no dots on it.
+		gridTilesFailed = true
+		warn("ScatterGraph: no canvas grid -- " .. tostring(err))
+	end
+
+	return gridTiles[size]
 end
 
 -- The part of a segment that falls inside a rectangle, or nothing if none of it
@@ -270,9 +371,11 @@ local function create(pluginRef: Plugin)
 	-- same set however many are in it.
 	local selection: { [Instance]: boolean } = {}
 	-- Where the canvas has been scrolled to, in view pixels, and how far it is
-	-- zoomed: a node at graph point p is drawn at pan + p * zoom.
+	-- zoomed: a node at graph point p is drawn at pan + p * zoom. The zoom is one
+	-- of the stops rather than any value, so it is held as which one.
 	local pan = Vector2.zero
-	local zoom = 1
+	local zoomStop = ZOOM_DEFAULT
+	local zoom = ZOOM_STOPS[zoomStop]
 	-- Rebuilt on every redraw: where each node sits, what its slots are, and the
 	-- widgets drawn for it.
 	local positions: { [Instance]: Vector2 } = {}
@@ -284,6 +387,10 @@ local function create(pluginRef: Plugin)
 
 	local root = nil
 	local canvas = nil
+	local gridLayer = nil
+	-- Which tile the grid is currently drawn from, so the zoom crossing a stop is
+	-- the only thing that swaps it.
+	local gridTileSize = nil
 	local content = nil
 	local contentScale = nil
 	local wireLayer = nil
@@ -308,14 +415,69 @@ local function create(pluginRef: Plugin)
 	-- zooming the canvas is a redraw of every wire and not just a new offset.
 	local layoutWires
 
+	-- The grid is drawn in the window's own pixels rather than the graph's, so
+	-- that the tile can be sized to the zoom and lined up with the graph's
+	-- multiples: one repeating image, wherever the canvas has been slid to.
+	local function refreshGrid()
+		if gridLayer == nil or canvas == nil then
+			return
+		end
+
+		local spacing = gridSpacingFor(zoom)
+		local onScreen = spacing * zoom
+		-- The tile is drawn at whatever the spacing works out to, so the image
+		-- behind it is that many pixels across.
+		local tileSize = math.max(2, math.round(onScreen))
+		local tile = gridTile(tileSize)
+
+		if tile == nil then
+			gridLayer.Visible = false
+			return
+		end
+
+		-- Only when the zoom has crossed a stop, rather than on every pan.
+		if gridTileSize ~= tileSize then
+			gridTileSize = tileSize
+			gridLayer.ImageContent = tile
+		end
+
+		-- Tiling starts at the label's own corner, so the label starts at the
+		-- last crossing at or before the corner of the canvas. That is what puts
+		-- a dot on every multiple of the spacing rather than on whichever graph
+		-- point the canvas happens to have been slid to.
+		--
+		-- Measured from where the canvas itself was put rather than from the pan
+		-- it came from: the canvas rounds the pan to a whole pixel, and the grid
+		-- starting anywhere else would leave every dot that fraction off the node
+		-- it belongs to. From here on the arithmetic is exact, since the spacing
+		-- is a multiple of the snap and the zoom a tenth.
+		local origin = Vector2.new(math.round(pan.X), math.round(pan.Y))
+		local low = -origin / zoom
+		local first = Vector2.new(math.floor(low.X / spacing), math.floor(low.Y / spacing)) * spacing
+		local corner = origin + first * zoom
+		local size = canvas.AbsoluteSize - corner + Vector2.new(onScreen, onScreen)
+
+		-- Rounded rather than left to the conversion a screen offset does anyway,
+		-- since these are whole numbers by the time they arrive and rounding says
+		-- so instead of hoping a float lands on the right side of it.
+		gridLayer.Visible = true
+		gridLayer.TileSize = UDim2.fromOffset(math.round(onScreen), math.round(onScreen))
+		gridLayer.Position = UDim2.fromOffset(math.round(corner.X), math.round(corner.Y))
+		gridLayer.Size = UDim2.fromOffset(math.round(size.X), math.round(size.Y))
+	end
+
 	local function applyView()
 		if content ~= nil then
-			content.Position = UDim2.fromOffset(pan.X, pan.Y)
+			-- Rounded, so that the grid can round its own corner the same way and
+			-- land on the same pixels as the nodes.
+			content.Position = UDim2.fromOffset(math.round(pan.X), math.round(pan.Y))
 		end
 
 		if contentScale ~= nil then
 			contentScale.Scale = zoom
 		end
+
+		refreshGrid()
 
 		if layoutWires ~= nil then
 			layoutWires()
@@ -505,6 +667,14 @@ local function create(pluginRef: Plugin)
 			if typeof(stored) == "Vector2" then
 				positions[node] = stored
 			end
+		end
+
+		-- Everything on the canvas sits on the grid, whether it was laid out by
+		-- the columns above or dragged somewhere by hand before there was a grid
+		-- to drag it onto. A nudged position is written back only when the node
+		-- is next moved, so this alone leaves the graph alone.
+		for node, position in positions do
+			positions[node] = snapToGrid(position)
 		end
 	end
 
@@ -747,6 +917,26 @@ local function create(pluginRef: Plugin)
 		return false
 	end
 
+	-- Writes down where the nodes are before an edit that would otherwise move
+	-- them. The columns are worked out from the wiring, so changing the wiring
+	-- relays out every node that has never been dragged: cutting a wire shortens
+	-- the chain behind it and everything downstream slides a column left, and a
+	-- chain no longer reaching the Output drops to a row of its own. The author
+	-- did not ask for any of that by deleting one wire.
+	--
+	-- Every node on the canvas rather than only the two either end of the wire,
+	-- since that is how far a relayout reaches. A node already carrying a
+	-- position is left as it is, because it is already saying where it wants to
+	-- be. Called inside the edit's own recording, so one undo takes the wiring
+	-- and these positions back together.
+	local function pinPositions()
+		for node, position in positions do
+			if node.Parent ~= nil and typeof(node:GetAttribute(POSITION_ATTRIBUTE)) ~= "Vector2" then
+				node:SetAttribute(POSITION_ATTRIBUTE, position)
+			end
+		end
+	end
+
 	local function connect(source: Instance, target: Instance, port)
 		if source == target or wouldCycle(source, target) then
 			warn("ScatterGraph Graph view: wiring " .. source.Name .. " into " .. target.Name
@@ -755,6 +945,8 @@ local function create(pluginRef: Plugin)
 		end
 
 		recorded("Connect " .. source.Name .. " to " .. target.Name, function()
+			pinPositions()
+
 			if isOutput(target) then
 				if port.isNew then
 					local entry = Instance.new("ObjectValue")
@@ -785,6 +977,8 @@ local function create(pluginRef: Plugin)
 
 	local function disconnect(target: Instance, wire: ObjectValue)
 		recorded("Break connection", function()
+			pinPositions()
+
 			if isOutput(target) then
 				-- An Output entry pointing at nothing is a rule that places
 				-- nothing and warns about it every evaluation, so the entry goes
@@ -957,7 +1151,10 @@ local function create(pluginRef: Plugin)
 				local card = cards[node]
 
 				if card ~= nil then
-					positions[node] = at + grab
+					-- Each node snaps on its own, which keeps the handful in the
+					-- arrangement it was picked up in: they were all on the grid
+					-- to begin with, so they all land the same distance off it.
+					positions[node] = snapToGrid(at + grab)
 					card.frame.Position = UDim2.fromOffset(positions[node].X, positions[node].Y)
 				end
 			end
@@ -1098,8 +1295,15 @@ local function create(pluginRef: Plugin)
 			return
 		end
 
+		local stop = math.clamp(zoomStop + math.round(notches), 1, #ZOOM_STOPS)
+
+		if stop == zoomStop then
+			return
+		end
+
 		local held = (at - pan) / zoom
-		zoom = math.clamp(zoom * ZOOM_STEP ^ notches, ZOOM_MIN, ZOOM_MAX)
+		zoomStop = stop
+		zoom = ZOOM_STOPS[zoomStop]
 		pan = at - held * zoom
 		applyView()
 
@@ -1436,18 +1640,63 @@ local function create(pluginRef: Plugin)
 		end
 	end
 
-	-- Slides the canvas so the top-left node is in view, which is the only way
-	-- back if the pan has wandered off into empty space.
+	-- Puts the whole graph on screen: the zoom comes down to a stop the nodes fit
+	-- inside and the canvas slides to centre them. This is the way back from a
+	-- pan or a zoom that has left the graph off the edge, so it has to answer for
+	-- both rather than only sliding.
 	local function frameAll()
-		local corner = nil
+		local low, high = nil, nil
 
-		for _, position in positions do
-			corner = if corner == nil
+		-- The far corner of a card as well as the near one, since a graph framed
+		-- by its top-left corners alone would run off the bottom and the right by
+		-- the size of the last node.
+		for node, position in positions do
+			local far = position + Vector2.new(NODE_WIDTH, nodeHeight(node))
+			low = if low == nil
 				then position
-				else Vector2.new(math.min(corner.X, position.X), math.min(corner.Y, position.Y))
+				else Vector2.new(math.min(low.X, position.X), math.min(low.Y, position.Y))
+			high = if high == nil
+				then far
+				else Vector2.new(math.max(high.X, far.X), math.max(high.Y, far.Y))
 		end
 
-		pan = if corner == nil then Vector2.zero else Vector2.new(MARGIN, MARGIN) - corner * zoom
+		if low == nil or high == nil then
+			pan = Vector2.zero
+			applyView()
+			return
+		end
+
+		-- The largest stop the graph fits at, with a margin left round it so the
+		-- outermost nodes are not flush against the edge. Never past actual size,
+		-- however few nodes there are: a two node graph blown up to fill the
+		-- canvas is not what asking to see all of it means.
+		local room = canvas.AbsoluteSize - Vector2.new(MARGIN, MARGIN) * 2
+		local span = high - low
+		local stop = 1
+
+		for index = ZOOM_DEFAULT, 1, -1 do
+			local candidate = ZOOM_STOPS[index]
+
+			if span.X * candidate <= room.X and span.Y * candidate <= room.Y then
+				stop = index
+				break
+			end
+		end
+
+		zoomStop = stop
+		zoom = ZOOM_STOPS[zoomStop]
+
+		-- A graph too big for even the smallest stop is shown from its top-left
+		-- corner rather than its middle, since that is where reading one starts.
+		local scaled = span * zoom
+		local corner = if scaled.X <= room.X and scaled.Y <= room.Y
+			then (canvas.AbsoluteSize - scaled) / 2
+			else Vector2.new(MARGIN, MARGIN)
+
+		pan = Vector2.new(
+			math.round(corner.X - low.X * zoom),
+			math.round(corner.Y - low.Y * zoom)
+		)
 		applyView()
 	end
 
@@ -1475,7 +1724,7 @@ local function create(pluginRef: Plugin)
 			end
 
 			node:SetAttribute("NodeType", template.nodeType)
-			node:SetAttribute(POSITION_ATTRIBUTE, at)
+			node:SetAttribute(POSITION_ATTRIBUTE, snapToGrid(at))
 
 			node.Parent = graph
 			created = node
@@ -1540,6 +1789,10 @@ local function create(pluginRef: Plugin)
 		local label = if #order == 1 then "Delete " .. order[1].Name else "Delete " .. #order .. " nodes"
 
 		recorded(label, function()
+			-- Deleting a node breaks the wires into it, which would move what is
+			-- left of the chain for the same reason breaking one by hand would.
+			pinPositions()
+
 			-- Wires left pointing at a node that is gone are not harmless: the
 			-- evaluator warns about an empty one and then carries on into it.
 			for _, other in collectNodes(graph) do
@@ -1647,7 +1900,8 @@ local function create(pluginRef: Plugin)
 		addRibbonButton({
 			icon = "\u{1F50D}",
 			label = "Frame All",
-			tooltip = "Slides the canvas back to the nodes, for when panning has left them off screen.",
+			tooltip = "Zooms out far enough to show every node and centres them, for when panning or zooming "
+				.. "has left the graph off screen. It never zooms in past actual size.",
 			requires = "graph",
 			activate = frameAll,
 		}).Parent = ribbon
@@ -1673,9 +1927,30 @@ local function create(pluginRef: Plugin)
 		canvas.ClipsDescendants = true
 		canvas.Parent = rootFrame
 
-		-- The canvas grows and shrinks with the window, and so does how much of
-		-- any given wire fits inside it.
-		canvas:GetPropertyChangedSignal("AbsoluteSize"):Connect(layoutWires)
+		-- The canvas grows and shrinks with the window, and so do how much of any
+		-- given wire fits inside it and how far the grid has to reach.
+		canvas:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+			refreshGrid()
+			layoutWires()
+		end)
+
+		-- Under everything else on the canvas, and drawn by repeating one tile
+		-- rather than by a frame per dot, which at ten pixels apart would be
+		-- thousands of them.
+		gridLayer = Instance.new("ImageLabel")
+		gridLayer.BackgroundTransparency = 1
+		gridLayer.BorderSizePixel = 0
+		gridLayer.ScaleType = Enum.ScaleType.Tile
+		-- Zooming stretches the tile, and a dot one pixel across is a smear once
+		-- it has been filtered; this keeps it a dot.
+		gridLayer.ResampleMode = Enum.ResamplerMode.Pixelated
+		gridLayer.ZIndex = 0
+		gridLayer.Visible = false
+		gridLayer.Parent = canvas
+
+		-- The interface is rebuilt on a theme change, and the tile the old one was
+		-- drawn from went with it.
+		gridTileSize = nil
 
 		-- Behind the nodes, and a button so that a press on empty canvas is
 		-- something this can hear rather than something the widget swallows.
