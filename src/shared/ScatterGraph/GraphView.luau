@@ -2,7 +2,7 @@
 	GraphView
 
 	The graph as a graph: every node of one ScatterGraph on a canvas, wired to
-	the nodes it feeds, with the parameters of whichever node is selected in a
+	the nodes it feeds, with the parameters of whichever nodes are selected in a
 	panel down the right-hand side.
 
 	The Rules window shows a rule as a flat list, which suits reading and tuning
@@ -13,9 +13,16 @@
 	other is used, and each picks up the other's edits.
 
 	The canvas is slid with the middle mouse button and zoomed with the wheel,
-	which leaves the left button free for the graph itself: picking a node,
-	carrying one, and trailing a wire out of a port. The right button opens the
-	node types as a menu, and adds the one chosen where the menu was opened.
+	which leaves the left button free for the graph itself: picking nodes,
+	carrying them, and trailing a wire out of a port. Dragging it over empty
+	canvas boxes in everything the box touches, and shift adds to what is already
+	picked rather than starting again. The right button opens the node types as a
+	menu, and adds the one chosen where the menu was opened.
+
+	More than one node can be picked, so everything that acts on a selection acts
+	on all of it: the panel shows each picked node under its own heading, a drag
+	carries the whole handful at once, and Delete Node deletes all of them as a
+	single undo.
 
 	Where the nodes sit is the one thing on the canvas that is not already in
 	the graph. A node dragged to a new place keeps it in a GraphPosition
@@ -60,6 +67,32 @@ local MARGIN = 40
 local ZOOM_STEP = 1.1
 local ZOOM_MIN = 0.25
 local ZOOM_MAX = 2.5
+
+-- A title bar is coloured by what its node does, so a chain reads at a glance:
+-- green makes points, teal derives more points from them, brown puts them on the
+-- ground, blue places geometry, and grey is the outlet the graph ends at. These
+-- are fixed rather than theme colours because they say which node type this is,
+-- not which part of the window it is.
+local TITLE_COLORS = {
+	ScatterPoints = Color3.fromRGB(62, 108, 74),
+	ScatterPointsAroundPoints = Color3.fromRGB(56, 102, 112),
+	SnapPointsToTerrain = Color3.fromRGB(122, 88, 50),
+	PlaceGeometryOnPoints = Color3.fromRGB(78, 84, 134),
+	Output = Color3.fromRGB(84, 84, 92),
+}
+-- A node type this window has never heard of still gets a card.
+local TITLE_FALLBACK = Color3.fromRGB(96, 82, 104)
+-- Written on the coloured strips rather than on the window, so it does not
+-- follow the theme's text colour onto a background that no longer follows it.
+local TITLE_TEXT = Color3.fromRGB(238, 238, 238)
+-- How much lighter the strip of the selected node is: enough to pick it out of a
+-- column, not so much that the type colour stops being the type colour.
+local TITLE_SELECTED_LIFT = 0.3
+-- Draws the edge of a card against both the canvas behind it and the card
+-- itself, in either Studio theme, which the theme's own border colour does not.
+local NODE_BORDER = Color3.fromRGB(158, 158, 158)
+-- Faint enough to read the nodes through the box being dragged over them.
+local MARQUEE_FILL = 0.85
 -- Share of the window the parameter panel takes.
 local PARAM_COLUMN = 0.32
 
@@ -107,6 +140,10 @@ end
 
 local function isOutput(node: Instance): boolean
 	return node:GetAttribute("NodeType") == "Output"
+end
+
+local function titleColor(node: Instance): Color3
+	return TITLE_COLORS[node:GetAttribute("NodeType")] or TITLE_FALLBACK
 end
 
 local function collectNodes(graph: Instance): { Instance }
@@ -185,7 +222,10 @@ local function create(pluginRef: Plugin)
 	local inspector = NodeInspector.new(pluginRef, overlay)
 
 	local graph: Instance? = nil
-	local selected: Instance? = nil
+	-- Which nodes are picked, as a set: a box dragged over the canvas can pick
+	-- any number of them, and the panel, the ribbon and a drag all work off the
+	-- same set however many are in it.
+	local selection: { [Instance]: boolean } = {}
 	-- Where the canvas has been scrolled to, in view pixels, and how far it is
 	-- zoomed: a node at graph point p is drawn at pan + p * zoom.
 	local pan = Vector2.zero
@@ -207,10 +247,12 @@ local function create(pluginRef: Plugin)
 	local nodeLayer = nil
 	local message = nil
 
-	-- What the pointer is doing to the canvas, if anything: sliding it,
-	-- carrying a node, or trailing a new connection out of a port.
+	-- What the pointer is doing to the canvas, if anything: sliding it, boxing in
+	-- what it passes over, carrying the nodes picked, or trailing a new
+	-- connection out of a port.
 	local drag = nil
 	local pendingWire = nil
+	local marqueeBox = nil
 
 	local rebuildQueued = false
 
@@ -456,44 +498,103 @@ local function create(pluginRef: Plugin)
 		end
 	end
 
+	-- The picked nodes in the order they are laid out, left to right and then top
+	-- to bottom, so the panel below reads the way the canvas does.
+	local function selectionList(): { Instance }
+		local nodes = {}
+
+		for node in selection do
+			table.insert(nodes, node)
+		end
+
+		table.sort(nodes, function(a, b)
+			local pa = positions[a] or Vector2.zero
+			local pb = positions[b] or Vector2.zero
+
+			if pa.X ~= pb.X then
+				return pa.X < pb.X
+			end
+
+			if pa.Y ~= pb.Y then
+				return pa.Y < pb.Y
+			end
+
+			return a:GetFullName() < b:GetFullName()
+		end)
+
+		return nodes
+	end
+
+	-- The one node in the selection, where being the only one is what matters:
+	-- deleting says something different about one node than about nine.
+	local function loneSelection(): Instance?
+		local only = nil
+
+		for node in selection do
+			if only ~= nil then
+				return nil
+			end
+			only = node
+		end
+
+		return only
+	end
+
 	local function paintSelection()
 		for node, card in cards do
-			local isSelected = node == selected
+			local isSelected = selection[node] == true
 
-			card.frame.BorderColor3 = color(
-				if isSelected then Enum.StudioStyleGuideColor.LinkText else Enum.StudioStyleGuideColor.Border
-			)
+			card.frame.BorderColor3 = if isSelected
+				then color(Enum.StudioStyleGuideColor.LinkText)
+				else NODE_BORDER
 			card.frame.BorderSizePixel = if isSelected then 2 else 1
-			card.strip.BackgroundColor3 = color(
-				Enum.StudioStyleGuideColor.Titlebar,
-				if isSelected then Enum.StudioStyleGuideModifier.Selected else nil
-			)
+			-- Selection lightens the type colour rather than replacing it, so a
+			-- selected node still says what it is.
+			card.strip.BackgroundColor3 = if isSelected
+				then card.tint:Lerp(Color3.new(1, 1, 1), TITLE_SELECTED_LIFT)
+				else card.tint
 		end
 	end
 
 	local function showInspector()
-		if selected == nil then
+		local nodes = selectionList()
+
+		if #nodes == 0 then
 			inspector.show(function()
 				return {}
-			end, "Select a node on the canvas to edit its parameters.")
+			end, "Select a node on the canvas to edit its parameters. Drag a box over several to pick them all.")
 			return
 		end
 
-		local node = selected
+		-- Every picked node in one panel, each under its own heading: the panel
+		-- is built to show a list, which is how the Rules window uses it.
 		inspector.show(function()
-			if node.Parent == nil then
-				return {}
+			local shown = {}
+
+			for _, node in nodes do
+				if node.Parent ~= nil then
+					table.insert(shown, node)
+				end
 			end
-			return { node }
-		end, "This node is no longer in the graph.")
+
+			return shown
+		end, "These nodes are no longer in the graph.")
 	end
 
 	local function updateRibbon()
 		local hasGraph = graph ~= nil and graph:IsDescendantOf(game)
 		-- The Output registry is the graph's outlet rather than a node the
 		-- author added, and a graph without one evaluates to nothing, so it is
-		-- not offered for deletion.
-		local hasNode = selected ~= nil and not isOutput(selected)
+		-- not offered for deletion. A selection that includes it still offers
+		-- deletion for whatever else is picked.
+		local hasNode = false
+
+		for node in selection do
+			if not isOutput(node) then
+				hasNode = true
+				break
+			end
+		end
 
 		for _, entry in ribbonButtons do
 			local enabled = if entry.requires == "node" then hasNode else hasGraph
@@ -506,17 +607,42 @@ local function create(pluginRef: Plugin)
 		end
 	end
 
-	-- Everything a change of selection shows: the card it is on, the parameters
-	-- in the panel, and which ribbon buttons a node being selected offers.
-	local function select(node: Instance?)
-		if node == selected then
-			return
-		end
-
-		selected = node
+	-- Everything a change of selection shows: the cards it is on, the parameters
+	-- in the panel, and which ribbon buttons having a node picked offers.
+	local function applySelection()
 		paintSelection()
 		showInspector()
 		updateRibbon()
+	end
+
+	local function selectOnly(node: Instance?)
+		-- Nothing has changed when the node asked for is already the only one
+		-- picked, or when a second click on empty canvas clears nothing.
+		if node == nil then
+			if next(selection) == nil then
+				return
+			end
+		elseif loneSelection() == node then
+			return
+		end
+
+		table.clear(selection)
+
+		if node ~= nil then
+			selection[node] = true
+		end
+
+		applySelection()
+	end
+
+	local function toggleSelected(node: Instance)
+		if selection[node] then
+			selection[node] = nil
+		else
+			selection[node] = true
+		end
+
+		applySelection()
 	end
 
 	-- Would connecting these feed a node back into itself? The evaluator follows
@@ -633,6 +759,34 @@ local function create(pluginRef: Plugin)
 		return nil, nil
 	end
 
+	-- Every node the box drawn between two graph points touches. Touching rather
+	-- than containing, so a box swept across a column picks the whole column
+	-- without having to reach round the ends of it.
+	local function nodesWithin(from: Vector2, to: Vector2): { Instance }
+		local low = Vector2.new(math.min(from.X, to.X), math.min(from.Y, to.Y))
+		local high = Vector2.new(math.max(from.X, to.X), math.max(from.Y, to.Y))
+
+		local found = {}
+
+		for node in inputs do
+			local origin = positions[node]
+
+			if origin ~= nil then
+				local corner = origin + Vector2.new(NODE_WIDTH, nodeHeight(node))
+				local overlaps = origin.X <= high.X
+					and corner.X >= low.X
+					and origin.Y <= high.Y
+					and corner.Y >= low.Y
+
+				if overlaps then
+					table.insert(found, node)
+				end
+			end
+		end
+
+		return found
+	end
+
 	local function clearPendingWire()
 		if pendingWire ~= nil then
 			pendingWire:Destroy()
@@ -640,22 +794,61 @@ local function create(pluginRef: Plugin)
 		end
 	end
 
+	local function clearMarquee()
+		if marqueeBox ~= nil then
+			marqueeBox:Destroy()
+			marqueeBox = nil
+		end
+	end
+
+	-- What the box covers, drawn in graph pixels like everything else on the
+	-- canvas so it stays over the same nodes while zoomed.
+	local function layoutMarquee(from: Vector2, to: Vector2)
+		if marqueeBox == nil then
+			return
+		end
+
+		local low = Vector2.new(math.min(from.X, to.X), math.min(from.Y, to.Y))
+		local size = Vector2.new(math.abs(to.X - from.X), math.abs(to.Y - from.Y))
+
+		marqueeBox.Position = UDim2.fromOffset(low.X, low.Y)
+		marqueeBox.Size = UDim2.fromOffset(size.X, size.Y)
+	end
+
 	local function endDrag()
 		local finished = drag
 		drag = nil
 
 		clearPendingWire()
+		clearMarquee()
 
 		if finished == nil then
 			return
 		end
 
 		if finished.kind == "node" then
-			if finished.moved and finished.node.Parent ~= nil then
-				recorded("Move " .. finished.node.Name, function()
-					finished.node:SetAttribute(POSITION_ATTRIBUTE, positions[finished.node])
+			if finished.moved then
+				-- One entry in the undo history for the whole handful, since one
+				-- drag moved them together.
+				local count = 0
+				for _ in finished.grabs do
+					count += 1
+				end
+
+				local label = if count == 1 then "Move " .. finished.node.Name else "Move " .. count .. " nodes"
+
+				recorded(label, function()
+					for node in finished.grabs do
+						if node.Parent ~= nil then
+							node:SetAttribute(POSITION_ATTRIBUTE, positions[node])
+						end
+					end
 				end)
 			end
+		elseif finished.kind == "marquee" then
+			-- The set was kept up to date as the box was dragged; the release is
+			-- what hands it to the panel and the ribbon.
+			applySelection()
 		elseif finished.kind == "wire" then
 			local target, port = portAt(finished.point or Vector2.zero)
 			if target ~= nil and port ~= nil and finished.node.Parent ~= nil then
@@ -682,17 +875,43 @@ local function create(pluginRef: Plugin)
 		end
 
 		if drag.kind == "node" then
-			local node = drag.node
-			local card = cards[node]
+			-- Every picked node carries its own offset from the pointer, so the
+			-- handful keeps its arrangement rather than piling up on the one
+			-- actually grabbed.
+			local at = canvasPoint(input)
 
-			if card == nil then
-				return
+			for node, grab in drag.grabs do
+				local card = cards[node]
+
+				if card ~= nil then
+					positions[node] = at + grab
+					card.frame.Position = UDim2.fromOffset(positions[node].X, positions[node].Y)
+				end
 			end
 
-			positions[node] = canvasPoint(input) - drag.grab
-			card.frame.Position = UDim2.fromOffset(positions[node].X, positions[node].Y)
 			drag.moved = true
 			layoutWires()
+			return
+		end
+
+		if drag.kind == "marquee" then
+			drag.point = canvasPoint(input)
+			layoutMarquee(drag.origin, drag.point)
+
+			-- Painted as the box moves, so what a release would pick is visible
+			-- before it happens. The panel and the ribbon wait for the release,
+			-- being far more work than a border colour.
+			table.clear(selection)
+
+			for node in drag.base do
+				selection[node] = true
+			end
+
+			for _, node in nodesWithin(drag.origin, drag.point) do
+				selection[node] = true
+			end
+
+			paintSelection()
 			return
 		end
 
@@ -724,6 +943,73 @@ local function create(pluginRef: Plugin)
 
 	local function beginPan(input: InputObject)
 		drag = { kind = "pan", grab = viewPoint(input) - pan }
+	end
+
+	-- Shift adds to what is already picked rather than starting again, for both
+	-- a box and a click.
+	local function addingToSelection(): boolean
+		return UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)
+			or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
+	end
+
+	-- A press on empty canvas starts boxing in nodes. A press that turns out to
+	-- be a click is a box of no size, which picks nothing -- which is what a
+	-- click on empty canvas means anyway.
+	local function beginMarquee(input: InputObject)
+		local base = {}
+
+		if addingToSelection() then
+			for node in selection do
+				base[node] = true
+			end
+		end
+
+		local origin = canvasPoint(input)
+		drag = { kind = "marquee", origin = origin, point = origin, base = base }
+
+		local box = Instance.new("Frame")
+		box.BackgroundColor3 = color(Enum.StudioStyleGuideColor.LinkText)
+		box.BackgroundTransparency = MARQUEE_FILL
+		box.BorderColor3 = color(Enum.StudioStyleGuideColor.LinkText)
+		box.BorderSizePixel = 1
+		box.ZIndex = 4
+		box.Parent = content
+		marqueeBox = box
+
+		layoutMarquee(origin, origin)
+
+		if next(selection) ~= nil and next(base) == nil then
+			table.clear(selection)
+			paintSelection()
+		end
+	end
+
+	-- Where a press on a card leaves the selection: the node pressed on its own,
+	-- unless it is already picked -- dragging a handful starts on one of them --
+	-- or shift is held, which adds it to or takes it out of the handful.
+	local function pickForDrag(node: Instance)
+		if addingToSelection() then
+			toggleSelected(node)
+			return
+		end
+
+		if not selection[node] then
+			selectOnly(node)
+		end
+	end
+
+	-- Every picked node's offset from where the pointer grabbed, which is what
+	-- moves them together. Whatever was pressed on is picked by now, so the
+	-- selection is the handful being carried.
+	local function beginNodeDrag(node: Instance, input: InputObject)
+		local at = canvasPoint(input)
+		local grabs = {}
+
+		for other in selection do
+			grabs[other] = (positions[other] or Vector2.zero) - at
+		end
+
+		drag = { kind = "node", node = node, grabs = grabs }
 	end
 
 	-- Zooming keeps whatever is under the pointer under it, so the wheel reads
@@ -826,18 +1112,21 @@ local function create(pluginRef: Plugin)
 		frame.Position = UDim2.fromOffset(origin.X, origin.Y)
 		frame.Size = UDim2.fromOffset(NODE_WIDTH, nodeHeight(node))
 		frame.BackgroundColor3 = color(Enum.StudioStyleGuideColor.MainBackground)
-		frame.BorderColor3 = color(Enum.StudioStyleGuideColor.Border)
+		frame.BorderColor3 = NODE_BORDER
+		frame.BorderSizePixel = 1
 		frame.Text = ""
 		frame.AutoButtonColor = false
 		frame.Parent = nodeLayer
 
+		local tint = titleColor(node)
+
 		local strip = Instance.new("Frame")
 		strip.Size = UDim2.new(1, 0, 0, TITLE_HEIGHT)
-		strip.BackgroundColor3 = color(Enum.StudioStyleGuideColor.Titlebar)
+		strip.BackgroundColor3 = tint
 		strip.BorderSizePixel = 0
 		strip.Parent = frame
 
-		local title = makeLabel(node.Name, color(Enum.StudioStyleGuideColor.BrightText), true)
+		local title = makeLabel(node.Name, TITLE_TEXT, true)
 		title.Size = UDim2.new(1, -PADDING * 2, 1, 0)
 		title.Position = UDim2.fromOffset(PADDING, 0)
 		title.Parent = strip
@@ -859,7 +1148,7 @@ local function create(pluginRef: Plugin)
 			ruleLabel.Parent = frame
 		end
 
-		cards[node] = { frame = frame, strip = strip }
+		cards[node] = { frame = frame, strip = strip, tint = tint }
 
 		if not isOutput(node) then
 			local port = makePort(frame, Vector2.new(NODE_WIDTH, TITLE_HEIGHT + PORT_ROW / 2), true)
@@ -870,7 +1159,7 @@ local function create(pluginRef: Plugin)
 
 			port.InputBegan:Connect(function(input)
 				if input.UserInputType == Enum.UserInputType.MouseButton1 then
-					select(node)
+					selectOnly(node)
 					beginWireDrag(node)
 				end
 			end)
@@ -910,8 +1199,13 @@ local function create(pluginRef: Plugin)
 				return
 			end
 
-			select(node)
-			drag = { kind = "node", node = node, grab = canvasPoint(input) - (positions[node] or Vector2.zero) }
+			pickForDrag(node)
+
+			-- Shift may have just taken this node out of the selection, which
+			-- makes the press a deselect rather than the start of a move.
+			if selection[node] then
+				beginNodeDrag(node, input)
+			end
 		end)
 
 		-- Being a button, the card takes the moves and the wheel over it as well
@@ -1017,7 +1311,7 @@ local function create(pluginRef: Plugin)
 
 		if graph == nil or not graph:IsDescendantOf(game) then
 			widget.Title = "ScatterGraph Graph View"
-			selected = nil
+			table.clear(selection)
 			inputs = {}
 			showMessage("This graph is no longer in the place.")
 			showInspector()
@@ -1034,8 +1328,12 @@ local function create(pluginRef: Plugin)
 			inputs[node] = inputPortsOf(node)
 		end
 
-		if selected ~= nil and inputs[selected] == nil then
-			selected = nil
+		-- A node picked before the graph changed under the window may be gone
+		-- now, and a selection is only ever of nodes that are on the canvas.
+		for node in selection do
+			if inputs[node] == nil then
+				selection[node] = nil
+			end
 		end
 
 		computeLayout(nodes)
@@ -1111,7 +1409,8 @@ local function create(pluginRef: Plugin)
 		end)
 
 		if made and created ~= nil then
-			selected = created
+			table.clear(selection)
+			selection[created] = true
 			rebuild()
 		end
 	end
@@ -1145,31 +1444,51 @@ local function create(pluginRef: Plugin)
 	end
 
 	local function deleteSelected()
-		local node = selected
-
-		if node == nil or graph == nil or node.Parent == nil or isOutput(node) then
+		if graph == nil then
 			return
 		end
 
-		recorded("Delete " .. node.Name, function()
+		-- The Output registry is not offered for deletion, so a selection that
+		-- happens to include it deletes everything else and leaves it alone.
+		local doomed = {}
+		local order = {}
+
+		for node in selection do
+			if node.Parent ~= nil and not isOutput(node) then
+				doomed[node] = true
+				table.insert(order, node)
+			end
+		end
+
+		if #order == 0 then
+			return
+		end
+
+		local label = if #order == 1 then "Delete " .. order[1].Name else "Delete " .. #order .. " nodes"
+
+		recorded(label, function()
 			-- Wires left pointing at a node that is gone are not harmless: the
 			-- evaluator warns about an empty one and then carries on into it.
 			for _, other in collectNodes(graph) do
-				for _, port in inputPortsOf(other) do
-					if port.wire ~= nil and port.wire.Value == node then
-						if isOutput(other) then
-							port.wire.Parent = nil
-						else
-							port.wire.Value = nil
+				if not doomed[other] then
+					for _, port in inputPortsOf(other) do
+						if port.wire ~= nil and doomed[port.wire.Value] then
+							if isOutput(other) then
+								port.wire.Parent = nil
+							else
+								port.wire.Value = nil
+							end
 						end
 					end
 				end
 			end
 
-			node.Parent = nil
+			for node in doomed do
+				node.Parent = nil
+			end
 		end)
 
-		selected = nil
+		table.clear(selection)
 		rebuild()
 	end
 
@@ -1246,8 +1565,8 @@ local function create(pluginRef: Plugin)
 		addRibbonButton({
 			icon = "\u{274C}",
 			label = "Delete Node",
-			tooltip = "Deletes the selected node and empties the wires that fed from it. The nodes feeding it "
-				.. "stay where they are.",
+			tooltip = "Deletes every selected node and empties the wires that fed from them. The nodes feeding "
+				.. "them stay where they are, and an Output in the selection is left alone.",
 			requires = "node",
 			activate = deleteSelected,
 		}).Parent = ribbon
@@ -1291,7 +1610,7 @@ local function create(pluginRef: Plugin)
 
 		background.InputBegan:Connect(function(input)
 			if input.UserInputType == Enum.UserInputType.MouseButton1 then
-				select(nil)
+				beginMarquee(input)
 			end
 		end)
 
@@ -1400,7 +1719,7 @@ local function create(pluginRef: Plugin)
 		graph = newGraph
 
 		if changed then
-			selected = nil
+			table.clear(selection)
 		end
 
 		widget.Enabled = true
