@@ -142,6 +142,49 @@ local function isOutput(node: Instance): boolean
 	return node:GetAttribute("NodeType") == "Output"
 end
 
+-- The part of a segment that falls inside a rectangle, or nothing if none of it
+-- does. Liang-Barsky: the segment is walked as a fraction of itself, and each
+-- edge of the rectangle either brings the near end forward or the far end back.
+local function clipSegment(from: Vector2, to: Vector2, low: Vector2, high: Vector2): (Vector2?, Vector2?)
+	local delta = to - from
+	local near, far = 0, 1
+
+	-- Each edge as "t * scale <= limit", which is a lower bound on t when the
+	-- segment crosses the edge on the way in and an upper bound on the way out.
+	local edges = {
+		{ -delta.X, from.X - low.X },
+		{ delta.X, high.X - from.X },
+		{ -delta.Y, from.Y - low.Y },
+		{ delta.Y, high.Y - from.Y },
+	}
+
+	for _, edge in edges do
+		local scale, limit = edge[1], edge[2]
+
+		if scale == 0 then
+			-- Parallel to this edge, so it is either inside it for the whole
+			-- length or outside it for the whole length.
+			if limit < 0 then
+				return nil, nil
+			end
+		else
+			local t = limit / scale
+
+			if scale < 0 then
+				near = math.max(near, t)
+			else
+				far = math.min(far, t)
+			end
+		end
+	end
+
+	if near > far then
+		return nil, nil
+	end
+
+	return from + delta * near, from + delta * far
+end
+
 local function titleColor(node: Instance): Color3
 	return TITLE_COLORS[node:GetAttribute("NodeType")] or TITLE_FALLBACK
 end
@@ -261,6 +304,9 @@ local function create(pluginRef: Plugin)
 	-- Opened from the canvas, but built out of the node templates and the
 	-- placement the ribbon's Add Node button uses, which are further down.
 	local openContextMenu
+	-- Wires are cut to the part of them the canvas can show, so sliding or
+	-- zooming the canvas is a redraw of every wire and not just a new offset.
+	local layoutWires
 
 	local function applyView()
 		if content ~= nil then
@@ -269,6 +315,10 @@ local function create(pluginRef: Plugin)
 
 		if contentScale ~= nil then
 			contentScale.Scale = zoom
+		end
+
+		if layoutWires ~= nil then
+			layoutWires()
 		end
 	end
 
@@ -480,15 +530,38 @@ local function create(pluginRef: Plugin)
 		end)
 	end
 
-	-- Roblox draws no lines, so a wire is a thin frame turned to face along it.
-	local function drawLine(line: Frame, from: Vector2, to: Vector2)
-		local delta = to - from
-		line.Size = UDim2.fromOffset(math.max(delta.Magnitude, 1), WIRE_THICKNESS)
-		line.Position = UDim2.fromOffset((from.X + to.X) / 2, (from.Y + to.Y) / 2)
-		line.Rotation = math.deg(math.atan2(delta.Y, delta.X))
+	-- What the canvas can currently show, in graph pixels.
+	local function visibleBounds(): (Vector2, Vector2)
+		local size = if canvas ~= nil then canvas.AbsoluteSize else Vector2.zero
+		return -pan / zoom, (size - pan) / zoom
 	end
 
-	local function layoutWires()
+	-- Roblox draws no lines, so a wire is a thin frame turned to face along it.
+	-- A turned frame is also the one thing ClipsDescendants does not hold to the
+	-- canvas, so a wire running off the edge would draw straight over the
+	-- parameter panel beside it: the segment is cut to what is on screen here
+	-- instead, which a frame at any angle obeys because it is only ever asked to
+	-- draw the part that fits.
+	local function drawLine(line: Frame, from: Vector2, to: Vector2)
+		local low, high = visibleBounds()
+		local start, finish = clipSegment(from, to, low, high)
+
+		if start == nil or finish == nil then
+			line.Visible = false
+			return
+		end
+
+		line.Visible = true
+
+		local delta = finish - start
+		line.Size = UDim2.fromOffset(math.max(delta.Magnitude, 1), WIRE_THICKNESS)
+		line.Position = UDim2.fromOffset((start.X + finish.X) / 2, (start.Y + finish.Y) / 2)
+		-- Off the whole wire's direction rather than the visible piece's, which
+		-- is the same heading but degenerates when the piece has no length.
+		line.Rotation = math.deg(math.atan2(to.Y - from.Y, to.X - from.X))
+	end
+
+	layoutWires = function()
 		for _, wire in wires do
 			local from = outputPortCenter(wire.from)
 			local to = inputPortCenter(wire.to, wire.index)
@@ -1594,9 +1667,15 @@ local function create(pluginRef: Plugin)
 		canvas.BackgroundColor3 = color(Enum.StudioStyleGuideColor.ViewPortBackground)
 		canvas.BorderSizePixel = 0
 		-- Everything on the canvas is positioned in graph pixels and may sit
-		-- well outside the visible corner of it.
+		-- well outside the visible corner of it. This holds the cards and the
+		-- box to the canvas; the wires cut themselves to it, being turned frames,
+		-- which clipping does not reach.
 		canvas.ClipsDescendants = true
 		canvas.Parent = rootFrame
+
+		-- The canvas grows and shrinks with the window, and so does how much of
+		-- any given wire fits inside it.
+		canvas:GetPropertyChangedSignal("AbsoluteSize"):Connect(layoutWires)
 
 		-- Behind the nodes, and a button so that a press on empty canvas is
 		-- something this can hear rather than something the widget swallows.
