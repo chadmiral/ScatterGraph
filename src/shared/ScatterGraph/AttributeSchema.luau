@@ -12,7 +12,8 @@
 
 	Attributes a node carries that are not listed here still appear -- their
 	editor is inferred from the value's type -- so an unrecognised node type, or
-	an attribute added by hand, stays editable.
+	an attribute added by hand, stays editable. The exceptions are the few
+	attributes that are bookkeeping rather than parameters, which are hidden.
 
 	Required attributes cannot be cleared. The nodes only warn when one is
 	missing and then carry on into an error or an empty result, which is a poor
@@ -195,6 +196,14 @@ local SCHEMA: { [string]: { Descriptor } } = {
 	},
 }
 
+-- Attributes that are not parameters of the node. NodeType is what makes it a
+-- node in the first place, and GraphPosition is where the Graph view's canvas
+-- last saw it dragged to; neither belongs in a list of values to tune.
+local HIDDEN = {
+	NodeType = true,
+	GraphPosition = true,
+}
+
 local KIND_BY_TYPE = {
 	number = "number",
 	boolean = "boolean",
@@ -227,7 +236,7 @@ function AttributeSchema.rowsFor(node: Instance): { Descriptor }
 
 	local extras = {}
 	for name, value in node:GetAttributes() do
-		if name ~= "NodeType" and not covered[name] then
+		if not HIDDEN[name] and not covered[name] then
 			table.insert(extras, AttributeSchema.infer(name, value))
 		end
 	end

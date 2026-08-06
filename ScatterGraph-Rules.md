@@ -60,6 +60,8 @@ Each **`ObjectValue`** under **`Output`**:
 
 Each rule is a **`Folder`** (same name as its **`Output`** entry) containing the node chain for that rule. Nodes are linked by **`ObjectValue`** children named **`Points`**.
 
+The folder is an organising convention, not something evaluation depends on: nodes are reached by following wires, so a node may sit anywhere under the biome root. Nodes added from the Graph View are parented to the root directly, since a node built by hand does not belong to a rule until something is wired to it.
+
 ### Wires
 
 | Wire name | Instance type | **`NodeType`** | **`Value`** |
@@ -320,6 +322,11 @@ Both rules avoid each other regardless of evaluation order. Where a tree and a b
 | Wire: `Points` | `NodeType` = `Points` |
 | Wire: `Asset` | `NodeType` = `Asset` |
 
+Any node may also carry **`GraphPosition`** (a `Vector2`), which is where the
+Graph View canvas last saw it dragged to. It is written only by dragging a node
+there, is ignored by evaluation, and is hidden from both windows' parameter
+lists. Deleting it just returns the node to the automatic column layout.
+
 ---
 
 ## Source layout
@@ -329,7 +336,10 @@ Both rules avoid each other regardless of evaluation order. Where a tree and a b
 | `src/shared/ScatterGraph/ScatterGraph.client.lua` | Plugin entry; volume grouping, node registry, evaluation loop |
 | `src/shared/ScatterGraph/ScatterGraphHelpers.luau` | Terrain snap, clustering, placement, exclusion zones |
 | `src/shared/ScatterGraph/RulesWindow.luau` | "Rules" dock widget: lists the place's graphs and the chosen graph's outputs, edits the attributes and Asset wire of the nodes feeding each one, and adds or deletes both graphs and rules |
-| `src/shared/ScatterGraph/AttributeSchema.luau` | Which values each node type takes, which editor the Rules window gives each one, and the description it shows on hover |
+| `src/shared/ScatterGraph/GraphView.luau` | "Graph View" dock widget: one graph as a canvas of wired nodes that can be added, moved, rewired and deleted, beside the parameters of the selected node |
+| `src/shared/ScatterGraph/NodeInspector.luau` | The attribute panel both windows use: a row and a suitable editor for every value of every node it is given |
+| `src/shared/ScatterGraph/GraphUi.luau` | Shared window furniture: theme colours, the tooltip and dropdown Roblox does not provide, and the undo recording every edit runs inside |
+| `src/shared/ScatterGraph/AttributeSchema.luau` | Which values each node type takes, which editor it gets, and the description shown on hover |
 | `src/shared/ScatterGraph/SequenceEditor.luau` | Popout keypoint editor for the `SlopeFilter` and `ColorRange` sequences, with a colour picker for the latter |
 | `src/shared/ScatterGraph/VolumeShape.luau` | Per-shape volume geometry: containment, footprint, and raycast extent for every part shape |
 | `src/shared/ScatterGraph/VolumeGroup.luau` | The volumes sharing one biome definition, queried as a single unioned region |

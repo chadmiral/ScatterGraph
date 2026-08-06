@@ -8,98 +8,47 @@
 	second with that graph's outputs -- the ObjectValue entries under its Output
 	node, one per placement rule. Picking one of those fills the third with every
 	attribute of every node that feeds it, walked upstream through the Points
-	wires so the chain reads source-first the way the graph does. Those
-	attributes are editable in place: AttributeSchema decides which editor each
-	one gets, and sequences open in the SequenceEditor popout. A row's value is
-	usually an attribute, but it can also be a child ObjectValue -- that is how
-	PlaceGeometryOnPoints points at the geometry it places -- and both kinds
-	read and write the same way from here.
+	wires so the chain reads source-first the way the graph does. That third
+	pane is a NodeInspector, which the Graph view uses too.
+
+	This window shows a rule as a list, which suits reading and tuning one rule.
+	The Graph view, opened from the ribbon, shows the same graph as a canvas of
+	wired nodes, which suits rearranging it.
 
 	The Studio selection does not choose which graph is shown. It is what the
 	Asset editor reads to name the geometry a rule places, so a window that
 	followed it would empty itself in the middle of that gesture.
 
 	The two ribbon rows along the top edit what the panes below them show. The
-	upper row makes and deletes whole graphs; the lower one deletes the selected
-	rule or adds one of the three chains that cover almost every rule in
-	practice. Every edit goes through ChangeHistoryService, so ctrl-Z undoes it
-	like any other Studio change.
+	upper row makes and deletes whole graphs, and opens one in the Graph view;
+	the lower one deletes the selected rule or adds one of the three chains that
+	cover almost every rule in practice. Every edit goes through GraphUi's
+	`recorded`, so ctrl-Z undoes it like any other Studio change.
 ]]
 
-local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Selection = game:GetService("Selection")
 
-local AttributeSchema = require(script.Parent:WaitForChild("AttributeSchema"))
-local SequenceEditor = require(script.Parent:WaitForChild("SequenceEditor"))
+local GraphUi = require(script.Parent:WaitForChild("GraphUi"))
+local GraphView = require(script.Parent:WaitForChild("GraphView"))
+local NodeInspector = require(script.Parent:WaitForChild("NodeInspector"))
 
 local RulesWindow = {}
 
-local PADDING = 6
-local ROW_HEIGHT = 22
-local SECTION_HEIGHT = 24
-local HEADER_HEIGHT = 26
-local RIBBON_HEIGHT = 30
-local BUTTON_HEIGHT = 22
+local PADDING = GraphUi.PADDING
+local SECTION_HEIGHT = GraphUi.SECTION_HEIGHT
+local HEADER_HEIGHT = GraphUi.HEADER_HEIGHT
+local RIBBON_HEIGHT = GraphUi.RIBBON_HEIGHT
+local BUTTON_HEIGHT = GraphUi.BUTTON_HEIGHT
+-- How the width is divided between the three panes. The last takes what is left.
 local GRAPH_COLUMN = 0.22
 local OUTPUT_COLUMN = 0.26
-local NAME_COLUMN = 0.45
-local TOOLTIP_WIDTH = 280
--- Long enough that sweeping the pointer down the rows does not flash a tooltip
--- at every one of them on the way past.
-local TOOLTIP_DELAY = 0.4
 
-local function color(guideColor: Enum.StudioStyleGuideColor, modifier: Enum.StudioStyleGuideModifier?): Color3
-	return settings().Studio.Theme:GetColor(guideColor, modifier)
-end
-
-local function indent(gui: GuiObject)
-	local padding = Instance.new("UIPadding")
-	padding.PaddingLeft = UDim.new(0, PADDING)
-	padding.Parent = gui
-end
-
--- Values shown as-is where tostring already reads well, and spelled out where it
--- does not: a NumberSequence stringifies to something unreadable, and an
--- Instance's name alone is ambiguous across a graph.
-local function formatValue(value: any): string
-	local valueType = typeof(value)
-
-	if valueType == "NumberSequence" then
-		local parts = {}
-		for _, keypoint in value.Keypoints do
-			table.insert(parts, string.format("%g -> %g", keypoint.Time, keypoint.Value))
-		end
-		return table.concat(parts, ", ")
-	elseif valueType == "ColorSequence" then
-		local parts = {}
-		for _, keypoint in value.Keypoints do
-			local c = keypoint.Value
-			table.insert(
-				parts,
-				string.format(
-					"%g -> #%02X%02X%02X",
-					keypoint.Time,
-					math.round(c.R * 255),
-					math.round(c.G * 255),
-					math.round(c.B * 255)
-				)
-			)
-		end
-		return table.concat(parts, ", ")
-	elseif valueType == "Color3" then
-		return string.format("#%02X%02X%02X", math.round(value.R * 255), math.round(value.G * 255), math.round(value.B * 255))
-	elseif valueType == "Vector2" then
-		return string.format("%g, %g", value.X, value.Y)
-	elseif valueType == "Vector3" then
-		return string.format("%g, %g, %g", value.X, value.Y, value.Z)
-	elseif valueType == "Instance" then
-		return value:GetFullName()
-	end
-
-	return tostring(value)
-end
+local color = GraphUi.color
+local indent = GraphUi.indent
+local makeLabel = GraphUi.makeLabel
+local recorded = GraphUi.recorded
 
 -- Where a graph can be kept: the storage services by convention, and Workspace
 -- because a graph is often left next to the volumes that use it.
@@ -221,33 +170,6 @@ local function collectUpstreamNodes(node: Instance?, visited: { [Instance]: bool
 	end
 
 	table.insert(ordered, node)
-end
-
-local function findWire(node: Instance, name: string): ObjectValue?
-	local wire = node:FindFirstChild(name)
-	return if wire ~= nil and wire:IsA("ObjectValue") then wire else nil
-end
-
--- An attribute is read straight off the node; a wire's value is the Value of
--- the child ObjectValue of that name. PlaceGeometryOnPoints takes its template
--- either way, so both have to reach the panel as ordinary rows.
-local function readDescriptorValue(node: Instance, descriptor): any
-	if descriptor.source == "wire" then
-		local wire = findWire(node, descriptor.name)
-		return if wire ~= nil then wire.Value else nil
-	end
-
-	return node:GetAttribute(descriptor.name)
-end
-
--- Is this row's value being ignored because the wire that outranks it is set?
-local function isSuperseded(node: Instance, descriptor): boolean
-	if descriptor.supersededBy == nil then
-		return false
-	end
-
-	local wire = findWire(node, descriptor.supersededBy)
-	return wire ~= nil and wire.Value ~= nil
 end
 
 -- The rule templates the ribbon can add. Each is a chain listed source-first;
@@ -449,26 +371,6 @@ local function deleteRule(graph: Instance, output: ObjectValue, allOutputs: { Ob
 	end
 end
 
--- Studio's undo stack only records what happens between these calls, so every
--- edit the ribbon makes has to run inside one.
-local function recorded(name: string, edit: () -> ())
-	local recording = ChangeHistoryService:TryBeginRecording(name)
-	local ok, err = pcall(edit)
-
-	if recording ~= nil then
-		ChangeHistoryService:FinishRecording(
-			recording,
-			if ok then Enum.FinishRecordingOperation.Commit else Enum.FinishRecordingOperation.Cancel
-		)
-	end
-
-	if not ok then
-		warn("ScatterGraph Rules: " .. name .. " failed -- " .. tostring(err))
-	end
-
-	return ok
-end
-
 function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 	-- Three panes side by side need a wider window than two did.
 	local widgetInfo = DockWidgetPluginGuiInfo.new(Enum.InitialDockState.Float, false, false, 720, 400, 460, 240)
@@ -489,21 +391,14 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 	local selectedOutputName = nil
 	-- The graph the two right-hand panes are showing.
 	local currentGraph: Instance? = nil
-	-- A value shown here can also be changed from the Properties pane or by an
-	-- undo, so the detail pane listens to the nodes it is showing to stay
-	-- current.
-	local detailConnections: { RBXScriptConnection } = {}
 	-- Most ribbon buttons act on the selected graph or the selected rule, so
 	-- they are greyed out when there is none; each remembers which it needs.
 	-- Rebuilt with the rest of the interface.
 	local ribbonButtons = {}
-	-- The open dropdown list, if any. Only one can be open at a time, and it
-	-- closes whenever the pane it belongs to is rebuilt.
-	local dropdown = nil
-	-- The visible tooltip, and a counter that tells a delayed one whether the
-	-- pointer is still where it was when the wait started.
-	local tooltip = nil
-	local tooltipToken = 0
+	-- The tooltips and menus this window floats over itself, and the panel that
+	-- draws the third pane.
+	local overlay = GraphUi.newOverlay()
+	local inspector = NodeInspector.new(pluginRef, overlay)
 
 	-- Rebuilds the graph list and everything under it; rebuilds the rule and
 	-- detail panes for the graph already chosen.
@@ -519,610 +414,28 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 		return currentGraph
 	end
 
-	local function closeDropdown()
-		if dropdown ~= nil then
-			dropdown:Destroy()
-			dropdown = nil
-		end
-	end
-
-	local function makeLabel(text: string, textColor: Color3, bold: boolean): TextLabel
-		local label = Instance.new("TextLabel")
-		label.BackgroundTransparency = 1
-		label.Font = if bold then Enum.Font.SourceSansBold else Enum.Font.SourceSans
-		label.TextSize = 14
-		label.TextColor3 = textColor
-		label.TextXAlignment = Enum.TextXAlignment.Left
-		label.TextTruncate = Enum.TextTruncate.AtEnd
-		label.Text = text
-		return label
-	end
-
-	local function hideTooltip()
-		-- Also cancels any tooltip still waiting out its delay.
-		tooltipToken += 1
-
-		if tooltip ~= nil then
-			tooltip:Destroy()
-			tooltip = nil
-		end
-	end
-
-	-- Roblox has no tooltip, so this is a panel pinned to the row that asked for
-	-- it. It sits below the row rather than under the pointer: a frame beneath
-	-- the pointer takes the hover from the row that raised it, and the two then
-	-- flicker against each other.
-	local function showTooltip(anchor: GuiObject, text: string)
-		hideTooltip()
-
-		local frame = Instance.new("Frame")
-		frame.Size = UDim2.fromOffset(TOOLTIP_WIDTH, 0)
-		frame.AutomaticSize = Enum.AutomaticSize.Y
-		frame.BackgroundColor3 = color(Enum.StudioStyleGuideColor.Titlebar)
-		frame.BorderColor3 = color(Enum.StudioStyleGuideColor.Border)
-		frame.ZIndex = 20
-		tooltip = frame
-
-		local padding = Instance.new("UIPadding")
-		padding.PaddingLeft = UDim.new(0, PADDING)
-		padding.PaddingRight = UDim.new(0, PADDING)
-		padding.PaddingTop = UDim.new(0, 4)
-		padding.PaddingBottom = UDim.new(0, 4)
-		padding.Parent = frame
-
-		local label = makeLabel(text, color(Enum.StudioStyleGuideColor.MainText), false)
-		label.Size = UDim2.new(1, 0, 0, 0)
-		label.AutomaticSize = Enum.AutomaticSize.Y
-		label.TextTruncate = Enum.TextTruncate.None
-		label.TextWrapped = true
-		label.TextYAlignment = Enum.TextYAlignment.Top
-		label.ZIndex = 20
-		label.Parent = frame
-
-		local offset = anchor.AbsolutePosition - root.AbsolutePosition
-		local below = offset.Y + anchor.AbsoluteSize.Y + 2
-		local x = math.clamp(offset.X, PADDING, math.max(PADDING, root.AbsoluteSize.X - TOOLTIP_WIDTH - PADDING))
-
-		-- The height is only known once the text has been laid out, so the
-		-- decision to hang the panel below the row or above it is made again
-		-- whenever that height lands.
-		local function place()
-			local height = frame.AbsoluteSize.Y
-			frame.Position = UDim2.fromOffset(
-				x,
-				if below + height <= root.AbsoluteSize.Y then below else math.max(0, offset.Y - height - 2)
-			)
-		end
-
-		-- Placed before it is shown, so it never appears in the corner for a
-		-- frame on the way to where it belongs.
-		place()
-		frame.Parent = root
-		frame:GetPropertyChangedSignal("AbsoluteSize"):Connect(place)
-	end
-
-	-- Waits out the hover delay before showing, and does nothing if the pointer
-	-- has moved on or the row has been rebuilt in the meantime.
-	local function watchForTooltip(anchor: GuiObject, text: string)
-		anchor.MouseEnter:Connect(function()
-			tooltipToken += 1
-			local token = tooltipToken
-
-			task.delay(TOOLTIP_DELAY, function()
-				if token == tooltipToken and anchor.Parent ~= nil then
-					showTooltip(anchor, text)
-				end
-			end)
-		end)
-
-		anchor.MouseLeave:Connect(hideTooltip)
-	end
-
-	local function clearDetail()
-		hideTooltip()
-		closeDropdown()
-
-		for _, connection in detailConnections do
-			connection:Disconnect()
-		end
-		table.clear(detailConnections)
-
-		for _, child in detailList:GetChildren() do
-			if not child:IsA("UIListLayout") then
-				child:Destroy()
-			end
-		end
-	end
-
-	local function commitValue(node: Instance, descriptor, value: any)
-		-- A node deleted while its row was on screen is not worth an error.
-		if node.Parent == nil then
-			return
-		end
-
-		recorded("Set " .. descriptor.name, function()
-			if descriptor.source ~= "wire" then
-				node:SetAttribute(descriptor.name, value)
-				return
-			end
-
-			local wire = findWire(node, descriptor.name)
-
-			-- Clearing empties the wire rather than removing it: an empty wire
-			-- and a missing one mean the same thing to the runtime, and the
-			-- empty one keeps the slot visible in the Explorer.
-			if wire == nil then
-				if value == nil then
-					return
-				end
-
-				wire = Instance.new("ObjectValue")
-				wire.Name = descriptor.name
-				wire:SetAttribute("NodeType", descriptor.wireNodeType or descriptor.name)
-				wire.Parent = node
-			end
-
-			wire.Value = value
-		end)
-	end
-
-	-- Roblox has no dropdown, so this is a list floated over the panes on a
-	-- full-window backdrop that dismisses it when clicked. Items are
-	-- { text, activate, enabled }; an item without an action, or with enabled
-	-- false, is a line of text the menu shows but does not offer.
-	local function openDropdown(anchor: GuiObject, items)
-		closeDropdown()
-
-		local backdrop = Instance.new("TextButton")
-		backdrop.Size = UDim2.fromScale(1, 1)
-		backdrop.BackgroundTransparency = 1
-		backdrop.Text = ""
-		backdrop.ZIndex = 10
-		backdrop.Parent = root
-		backdrop.Activated:Connect(closeDropdown)
-		dropdown = backdrop
-
-		local height = #items * ROW_HEIGHT
-		local offset = anchor.AbsolutePosition - root.AbsolutePosition
-		local below = offset.Y + anchor.AbsoluteSize.Y
-
-		local list = Instance.new("Frame")
-		list.Size = UDim2.fromOffset(anchor.AbsoluteSize.X, height)
-		-- Flips above the field when there is no room beneath it, which there
-		-- often is not in a window this short.
-		list.Position = UDim2.fromOffset(
-			offset.X,
-			if below + height <= root.AbsoluteSize.Y then below else math.max(0, offset.Y - height)
-		)
-		list.BackgroundColor3 = color(Enum.StudioStyleGuideColor.MainBackground)
-		list.BorderColor3 = color(Enum.StudioStyleGuideColor.Border)
-		list.ZIndex = 11
-		list.Parent = backdrop
-
-		local layout = Instance.new("UIListLayout")
-		layout.SortOrder = Enum.SortOrder.LayoutOrder
-		layout.Parent = list
-
-		for index, item in items do
-			local enabled = item.activate ~= nil and item.enabled ~= false
-
-			local button = Instance.new("TextButton")
-			button.Size = UDim2.new(1, 0, 0, ROW_HEIGHT)
-			button.LayoutOrder = index
-			button.BackgroundColor3 = color(Enum.StudioStyleGuideColor.TableItem)
-			button.BorderSizePixel = 0
-			button.AutoButtonColor = enabled
-			button.Font = Enum.Font.SourceSans
-			button.TextSize = 14
-			button.TextColor3 = color(
-				if enabled then Enum.StudioStyleGuideColor.MainText else Enum.StudioStyleGuideColor.DimmedText
-			)
-			button.TextXAlignment = Enum.TextXAlignment.Left
-			button.TextTruncate = Enum.TextTruncate.AtEnd
-			button.Text = item.text
-			button.ZIndex = 11
-			indent(button)
-			button.Parent = list
-
-			button.Activated:Connect(function()
-				if not enabled then
-					return
-				end
-
-				closeDropdown()
-				item.activate()
-			end)
-		end
-	end
-
-	local function makeEditorContainer(): Frame
-		local container = Instance.new("Frame")
-		container.BackgroundTransparency = 1
-		container.Position = UDim2.new(NAME_COLUMN, 0, 0, 0)
-		container.Size = UDim2.new(1 - NAME_COLUMN, -PADDING, 1, 0)
-		return container
-	end
-
-	local function makeInput(): TextBox
-		local box = Instance.new("TextBox")
-		box.Position = UDim2.fromOffset(0, 2)
-		box.Size = UDim2.new(1, 0, 1, -4)
-		box.BackgroundColor3 = color(Enum.StudioStyleGuideColor.InputFieldBackground)
-		box.BorderColor3 = color(Enum.StudioStyleGuideColor.InputFieldBorder)
-		box.Font = Enum.Font.SourceSans
-		box.TextSize = 14
-		box.TextColor3 = color(Enum.StudioStyleGuideColor.MainText)
-		box.TextXAlignment = Enum.TextXAlignment.Left
-		box.PlaceholderText = "(not set)"
-		box.PlaceholderColor3 = color(Enum.StudioStyleGuideColor.DimmedText)
-		box.ClearTextOnFocus = false
-		box.Text = ""
-		indent(box)
-		return box
-	end
-
-	local function makeValueButton(text: string, unset: boolean): TextButton
-		local button = Instance.new("TextButton")
-		button.Position = UDim2.fromOffset(0, 2)
-		button.Size = UDim2.new(1, 0, 1, -4)
-		button.BackgroundColor3 = color(Enum.StudioStyleGuideColor.Button)
-		button.BorderColor3 = color(Enum.StudioStyleGuideColor.ButtonBorder)
-		button.Font = Enum.Font.SourceSans
-		button.TextSize = 14
-		button.TextColor3 = color(
-			if unset then Enum.StudioStyleGuideColor.DimmedText else Enum.StudioStyleGuideColor.ButtonText
-		)
-		button.TextXAlignment = Enum.TextXAlignment.Left
-		button.TextTruncate = Enum.TextTruncate.AtEnd
-		button.Text = text
-		indent(button)
-		return button
-	end
-
-	-- Text and number fields both commit when the field loses focus, and put
-	-- back the old text when what was typed cannot be used. Clearing a field
-	-- removes an optional attribute; a required one cannot be cleared, since the
-	-- nodes only warn about a missing parameter before failing on it.
-	local function makeTextEditor(node: Instance, descriptor, value: any): Frame
-		local container = makeEditorContainer()
-		local box = makeInput()
-
-		local function display(): string
-			if value == nil then
-				return ""
-			end
-			return if descriptor.kind == "number" then string.format("%g", value) else tostring(value)
-		end
-
-		box.Text = display()
-		box.Parent = container
-
-		box.FocusLost:Connect(function()
-			local text = string.match(box.Text, "^%s*(.-)%s*$")
-
-			if text == "" then
-				if descriptor.optional then
-					commitValue(node, descriptor, nil)
-				elseif descriptor.kind == "string" then
-					commitValue(node, descriptor, "")
-				else
-					box.Text = display()
-				end
-				return
-			end
-
-			if descriptor.kind ~= "number" then
-				commitValue(node, descriptor, text)
-				return
-			end
-
-			local number = tonumber(text)
-			if number == nil then
-				box.Text = display()
-				return
-			end
-
-			commitValue(node, descriptor, if descriptor.integer then math.round(number) else number)
-		end)
-
-		return container
-	end
-
-	local function makeChoiceEditor(node: Instance, descriptor, value: any): Frame
-		local container = makeEditorContainer()
-		local button = makeValueButton(if value ~= nil then tostring(value) else "(not set)", value == nil)
-		button.Parent = container
-
-		local items = {}
-		for _, option in descriptor.choices do
-			table.insert(items, {
-				text = option,
-				activate = function()
-					commitValue(node, descriptor, option)
-				end,
-			})
-		end
-
-		if descriptor.optional then
-			table.insert(items, {
-				text = "(not set)",
-				activate = function()
-					commitValue(node, descriptor, nil)
-				end,
-			})
-		end
-
-		button.Activated:Connect(function()
-			openDropdown(button, items)
-		end)
-
-		return container
-	end
-
-	-- An instance reference cannot be typed, so it is set from the Studio
-	-- selection, which is the same gesture the Properties pane uses for an
-	-- ObjectValue. The menu is built at click time because the selection is.
-	local function makeInstanceEditor(node: Instance, descriptor, value: any): Frame
-		local container = makeEditorContainer()
-		local button = makeValueButton(if value ~= nil then value.Name else "(not set)", value == nil)
-		button.Parent = container
-
-		button.Activated:Connect(function()
-			local items = {}
-
-			-- The button only has room for a name, and a name alone is often
-			-- ambiguous, so the menu opens with where the thing actually lives.
-			if value ~= nil then
-				table.insert(items, { text = value:GetFullName() })
-			end
-
-			local selected = Selection:Get()
-			if #selected == 1 then
-				table.insert(items, {
-					text = "Set to " .. selected[1].Name,
-					activate = function()
-						commitValue(node, descriptor, selected[1])
-					end,
-				})
-			else
-				table.insert(items, { text = "Select one instance in Studio to set" })
-			end
-
-			if value ~= nil then
-				table.insert(items, {
-					text = "Clear",
-					activate = function()
-						commitValue(node, descriptor, nil)
-					end,
-				})
-			end
-
-			openDropdown(button, items)
-		end)
-
-		return container
-	end
-
-	-- The runtime reads AvoidIntersections as `== true`, so an unset attribute
-	-- and false mean the same thing and the box only ever writes a real boolean.
-	local function makeBooleanEditor(node: Instance, descriptor, value: any): Frame
-		local container = makeEditorContainer()
-		local checked = value == true
-		local button = makeValueButton(tostring(checked), value == nil)
-		button.Parent = container
-
-		button.Activated:Connect(function()
-			commitValue(node, descriptor, not checked)
-		end)
-
-		return container
-	end
-
-	local function makeVector2Editor(node: Instance, descriptor, value: any): Frame
-		local container = makeEditorContainer()
-		local components = descriptor.components or { "X", "Y" }
-		local current = value or descriptor.default or Vector2.zero
-
-		for index = 1, 2 do
-			local box = makeInput()
-			box.Size = UDim2.new(0.5, -2, 1, -4)
-			box.Position = UDim2.new(0.5 * (index - 1), if index == 1 then 0 else 2, 0, 2)
-			box.PlaceholderText = components[index]
-			box.Text = if value ~= nil then string.format("%g", if index == 1 then value.X else value.Y) else ""
-			box.Parent = container
-
-			box.FocusLost:Connect(function()
-				local number = tonumber(box.Text)
-				if number == nil then
-					box.Text = if value ~= nil
-						then string.format("%g", if index == 1 then value.X else value.Y)
-						else ""
-					return
-				end
-
-				local updated = if index == 1 then Vector2.new(number, current.Y) else Vector2.new(current.X, number)
-				commitValue(node, descriptor, updated)
-			end)
-		end
-
-		return container
-	end
-
-	local function makeSequenceEditor(node: Instance, descriptor, value: any): Frame
-		local container = makeEditorContainer()
-		local button = makeValueButton(if value ~= nil then formatValue(value) else "(not set)", value == nil)
-		button.Parent = container
-
-		button.Activated:Connect(function()
-			SequenceEditor.open(
-				pluginRef,
-				node.Name .. "." .. descriptor.name,
-				descriptor.kind,
-				value or descriptor.default,
-				function(sequence)
-					commitValue(node, descriptor, sequence)
-				end
-			)
-		end)
-
-		return container
-	end
-
-	local function makeEditor(node: Instance, descriptor, value: any): Frame
-		if descriptor.kind == "number" or descriptor.kind == "string" then
-			return makeTextEditor(node, descriptor, value)
-		elseif descriptor.kind == "choice" then
-			return makeChoiceEditor(node, descriptor, value)
-		elseif descriptor.kind == "boolean" then
-			return makeBooleanEditor(node, descriptor, value)
-		elseif descriptor.kind == "vector2" then
-			return makeVector2Editor(node, descriptor, value)
-		elseif descriptor.kind == "numberSequence" or descriptor.kind == "colorSequence" then
-			return makeSequenceEditor(node, descriptor, value)
-		elseif descriptor.kind == "instance" then
-			return makeInstanceEditor(node, descriptor, value)
-		end
-
-		local container = makeEditorContainer()
-		local label = makeLabel(
-			if value ~= nil then formatValue(value) else "(not set)",
-			color(Enum.StudioStyleGuideColor.DimmedText),
-			false
-		)
-		label.Size = UDim2.fromScale(1, 1)
-		label.Parent = container
-		return container
-	end
-
-	local function addAttributeRow(node: Instance, descriptor, order: number)
-		local row = Instance.new("Frame")
-		row.BackgroundTransparency = 1
-		row.Size = UDim2.new(1, 0, 0, ROW_HEIGHT)
-		row.LayoutOrder = order
-
-		-- Both ways of naming the geometry are always shown, so the one that is
-		-- currently losing says as much rather than looking like it applies.
-		local superseded = isSuperseded(node, descriptor)
-		local name = if superseded then descriptor.name .. " (unused)" else descriptor.name
-
-		local nameLabel = makeLabel(name, color(Enum.StudioStyleGuideColor.DimmedText), false)
-		nameLabel.Size = UDim2.new(NAME_COLUMN, -PADDING, 1, 0)
-		nameLabel.Position = UDim2.fromOffset(PADDING, 0)
-		nameLabel.Parent = row
-
-		-- Hung off the name rather than the whole row: the editors are their own
-		-- input targets, and a tooltip that came and went as the pointer crossed
-		-- into a field would be a distraction while typing.
-		if descriptor.description ~= nil then
-			watchForTooltip(nameLabel, descriptor.description)
-		end
-
-		local editor = makeEditor(node, descriptor, readDescriptorValue(node, descriptor))
-		if superseded then
-			local box = editor:FindFirstChildOfClass("TextBox")
-			if box ~= nil then
-				box.PlaceholderText = "(" .. descriptor.supersededBy .. " is set)"
-			end
-		end
-		editor.Parent = row
-
-		row.Parent = detailList
-	end
-
-	-- Full-width prose, for the cases where there are no attributes to lay out in
-	-- two columns.
-	local function addDetailMessage(text: string, order: number)
-		local label = makeLabel(text, color(Enum.StudioStyleGuideColor.DimmedText), false)
-		label.Size = UDim2.new(1, -PADDING * 2, 0, ROW_HEIGHT)
-		label.LayoutOrder = order
-		label.TextTruncate = Enum.TextTruncate.None
-		label.TextWrapped = true
-		label.AutomaticSize = Enum.AutomaticSize.Y
-		indent(label)
-		label.Parent = detailList
-	end
-
-	local function addDetailSection(node: Instance, order: number)
-		local nodeType = node:GetAttribute("NodeType")
-
-		-- Reveals the node in the Explorer and the Properties pane, for the parts
-		-- of it this window does not show. The selection still resolves to this
-		-- same graph, so the panes survive the round trip.
-		local section = Instance.new("TextButton")
-		section.Size = UDim2.new(1, 0, 0, SECTION_HEIGHT)
-		section.LayoutOrder = order
-		section.BackgroundColor3 = color(Enum.StudioStyleGuideColor.Titlebar)
-		section.BorderSizePixel = 0
-		section.AutoButtonColor = false
-		section.Font = Enum.Font.SourceSansBold
-		section.TextSize = 14
-		section.TextColor3 = color(Enum.StudioStyleGuideColor.BrightText)
-		section.TextXAlignment = Enum.TextXAlignment.Left
-		section.TextTruncate = Enum.TextTruncate.AtEnd
-		section.Text = node.Name .. "  (" .. tostring(nodeType) .. ")"
-		indent(section)
-		section.Parent = detailList
-
-		section.Activated:Connect(function()
-			Selection:Set({ node })
-		end)
-
-		watchForTooltip(section, "Click to select this node in the Explorer, where the Properties pane shows "
-			.. "what this window leaves out.")
-	end
-
+	-- The panel is handed the chain rather than the output, and asks for it
+	-- again on every rebuild: rewiring a Points wire changes which nodes belong
+	-- on screen, and by then the output alone is all that is still known to be
+	-- good.
 	local function showOutput(output: ObjectValue?)
-		clearDetail()
-
 		if output == nil then
 			detailHeader.Text = "No rule selected"
+			inspector.clear()
 			return
 		end
 
 		detailHeader.Text = output.Name
 
-		if output.Value == nil then
-			addDetailMessage("This output is not wired to a node.", 0)
-			return
-		end
-
-		local ordered = {}
-		collectUpstreamNodes(output.Value, {}, ordered)
-
-		local function rebuild()
-			showOutput(output)
-		end
-
-		local order = 0
-		for _, node in ordered do
-			order += 1
-			addDetailSection(node, order)
-
-			local rows = AttributeSchema.rowsFor(node)
-			if #rows == 0 then
-				order += 1
-				addDetailMessage("(no attributes)", order)
+		inspector.show(function()
+			if output.Parent == nil or output.Value == nil then
+				return {}
 			end
 
-			for _, descriptor in rows do
-				order += 1
-				addAttributeRow(node, descriptor, order)
-			end
-
-			-- A row's value may live in an attribute or in a child ObjectValue,
-			-- and either can be changed from here, from the Properties pane, or
-			-- by an undo, so the pane watches both. Rewiring a Points wire also
-			-- changes which nodes belong on screen at all.
-			table.insert(detailConnections, node.AttributeChanged:Connect(rebuild))
-			table.insert(detailConnections, node.ChildAdded:Connect(rebuild))
-			table.insert(detailConnections, node.ChildRemoved:Connect(rebuild))
-
-			for _, child in node:GetChildren() do
-				if child:IsA("ObjectValue") then
-					table.insert(detailConnections, child.Changed:Connect(rebuild))
-				end
-			end
-		end
+			local ordered = {}
+			collectUpstreamNodes(output.Value, {}, ordered)
+			return ordered
+		end, "This output is not wired to a node.")
 	end
 
 	local function addListRow(list: ScrollingFrame, text: string, isSelected: boolean, order: number, pick: () -> ())
@@ -1272,7 +585,7 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 		-- The handlers re-resolve what they act on, so a click that slips
 		-- through while the button looks disabled still does nothing.
 		button.Activated:Connect(spec.activate)
-		watchForTooltip(button, spec.tooltip)
+		overlay.watchForTooltip(button, spec.tooltip)
 
 		table.insert(ribbonButtons, { button = button, requires = spec.requires })
 		return button
@@ -1304,6 +617,10 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 		rootFrame.BackgroundColor3 = color(Enum.StudioStyleGuideColor.MainBackground)
 		rootFrame.BorderSizePixel = 0
 		rootFrame.Parent = widget
+
+		-- The floating panels belong to whatever frame is current, and the one
+		-- they were last parented to has just been destroyed.
+		overlay.attach(rootFrame)
 
 		local function makePane(position: UDim2, size: UDim2, title: string): (TextLabel, ScrollingFrame)
 			local pane = Instance.new("Frame")
@@ -1394,6 +711,19 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 			requires = "graph",
 			activate = deleteCurrentGraph,
 		}).Parent = graphRibbon
+		addRibbonButton({
+			icon = "\u{1F5FA}\u{FE0F}",
+			label = "Graph View",
+			tooltip = "Opens the selected graph as a node graph: every node on a canvas, wired to the ones "
+				.. "it feeds, where nodes can be added, moved, rewired and deleted.",
+			requires = "graph",
+			activate = function()
+				local graph = activeGraph()
+				if graph ~= nil then
+					GraphView.open(pluginRef, graph)
+				end
+			end,
+		}).Parent = graphRibbon
 
 		addRibbonButton({
 			icon = "\u{274C}",
@@ -1472,20 +802,28 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 		)
 		detailHeader = header
 		detailList = detailScroll
+		inspector.setList(detailList)
+	end
+
+	-- Nothing to inspect, but the pane says why rather than sitting blank.
+	local function showNothing(message: string)
+		detailHeader.Text = "No rule selected"
+		inspector.show(function()
+			return {}
+		end, message)
 	end
 
 	refreshRules = function()
 		local graph = activeGraph()
 
-		clearDetail()
+		inspector.clear()
 		clearList(outputList)
 
 		if graph == nil then
 			selectedOutputName = nil
 			updateRibbon(false, false)
 			outputHeader.Text = "No graph selected"
-			detailHeader.Text = "No rule selected"
-			addDetailMessage("Select a ScatterGraph on the left.", 0)
+			showNothing("Select a ScatterGraph on the left.")
 			return
 		end
 
@@ -1495,8 +833,7 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 		if #outputs == 0 then
 			selectedOutputName = nil
 			updateRibbon(true, false)
-			detailHeader.Text = "No rule selected"
-			addDetailMessage(graph.Name .. " has no outputs. Add a rule from the ribbon above.", 0)
+			showNothing(graph.Name .. " has no outputs. Add a rule from the ribbon above.")
 			return
 		end
 
@@ -1596,7 +933,7 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 			return
 		end
 
-		closeDropdown()
+		overlay.closeDropdown()
 
 		if refreshGraphs() then
 			refreshRules()
