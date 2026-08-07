@@ -97,7 +97,7 @@ function OccupancyStore:_intersectsSolid(x: number, z: number, radius: number, i
 end
 
 -- Queue an opt-in placement for later resolution.
--- cand = { instance, x, z, radius, priority, branchId }
+-- cand = { instance, x, z, xmm, zmm, occ, radius, priority, branchId, ruleKey }
 function OccupancyStore:addCandidate(cand)
 	table.insert(self.candidates, cand)
 end
@@ -121,8 +121,10 @@ end
 -- Resolve all deferred candidates against solids and one another. Because the
 -- candidate list is sorted into a fixed global order first (lowest Priority
 -- number wins), the surviving set is the same regardless of the order branches
--- were evaluated in. Surviving candidates are tagged and become solids; rejected
--- ones are destroyed.
+-- were evaluated in. Surviving candidates are tagged and become solids, and are
+-- recorded in the run's ledger as placed (their point survived after all);
+-- rejected ones are destroyed, and were never recorded, so the ledger prunes
+-- their stale entry at the end of the run.
 function OccupancyStore:resolveDeferred()
 	table.sort(self.candidates, candidateLess)
 
@@ -132,6 +134,9 @@ function OccupancyStore:resolveDeferred()
 		else
 			CollectionService:AddTag(cand.instance, "ScatterGraphInstance")
 			self:addSolid(cand.x, cand.z, cand.radius, cand.branchId)
+			if self.run ~= nil and self.graphKey ~= nil and cand.ruleKey ~= nil then
+				self.run:recordPlaced(self.graphKey, cand.ruleKey, cand.xmm, cand.zmm, cand.occ)
+			end
 		end
 	end
 

@@ -45,8 +45,9 @@ function PlaceGeometryOnPointsNode:evaluate(volumes, terrain, ctx)
 		local priority = n:GetAttribute("Priority") or 0
 
 		points = Helpers.excludePoints(points, ctx.exclusionFunctions)
-		-- The terminal node uniquely identifies this branch, so its own
-		-- placements never reject one another during resolution.
+		-- The rule identity threaded down from the Output entry lets each
+		-- placement be stamped and recorded, and stands in for the branch id so
+		-- a rule never rejects its own placements during resolution.
 		Helpers.placeGeoOnPoints(
 			geo,
 			points,
@@ -58,7 +59,10 @@ function PlaceGeometryOnPointsNode:evaluate(volumes, terrain, ctx)
 			avoidIntersections,
 			radius,
 			priority,
-			n
+			ctx.run,
+			ctx.graphKey,
+			ctx.ruleKey,
+			ctx.ruleName
 		)
 	end
 end

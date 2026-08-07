@@ -1,4 +1,5 @@
 local GraphNode = require(script.Parent:WaitForChild("GraphNode"))
+local PlacementLedger = require(script.Parent.Parent:WaitForChild("PlacementLedger"))
 
 local OutputNode = GraphNode:new()
 OutputNode.name = "OutputNode"
@@ -15,7 +16,11 @@ function OutputNode:evaluate(volumes, terrain, ctx)
 			if wire.Value == nil then
 				warn("missing value in OutputNode wire " .. wire.Name)
 			end
-			ctx.evaluateNode(wire.Value, volumes, terrain, debugString)
+			-- This is where a rule gets its name: the entry naming the chain is
+			-- the one thing that knows it. The identity is threaded down so the
+			-- terminal can stamp and record every placement under it.
+			local ruleKey, ruleName = PlacementLedger.ruleKey(wire)
+			ctx.evaluateNode(wire.Value, volumes, terrain, debugString, ruleKey, ruleName)
 		end
 	end
 	return nil

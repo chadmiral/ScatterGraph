@@ -1,6 +1,8 @@
 local CollectionService = game:GetService("CollectionService")
 
 local VolumeShape = require(script.Parent:WaitForChild("VolumeShape"))
+local PlacementStamp = require(script.Parent:WaitForChild("PlacementStamp"))
+local PlacementLedger = require(script.Parent:WaitForChild("PlacementLedger"))
 
 local M = {}
 
@@ -132,6 +134,39 @@ function M.scatterPointsAroundPoints(volumes, terrain, seed, points, count, inne
 	return newPoints
 end
 
+-- Assigns each point an occurrence index within its own millimetre-quantised
+-- X,Z cell, so two placements of one rule that share a column can still be told
+-- apart. Ordered by height, then by the order they were handed in, so the same
+-- point set always yields the same indices. Returned keyed by original index,
+-- since the placement loop must run in its original order to keep the random
+-- stream aligned.
+local function occurrenceIndices(points): { number }
+	local cells = {}
+	for index, p in points do
+		local cellKey = PlacementLedger.qmm(p.X) .. "," .. PlacementLedger.qmm(p.Z)
+		local cell = cells[cellKey]
+		if cell == nil then
+			cell = {}
+			cells[cellKey] = cell
+		end
+		table.insert(cell, { index = index, y = p.Y })
+	end
+
+	local occByIndex = table.create(#points)
+	for _, cell in cells do
+		table.sort(cell, function(a, b)
+			if a.y ~= b.y then
+				return a.y < b.y
+			end
+			return a.index < b.index
+		end)
+		for rank, item in cell do
+			occByIndex[item.index] = rank - 1
+		end
+	end
+	return occByIndex
+end
+
 function M.placeGeoOnPoints(
 	templateGeo,
 	points,
@@ -143,70 +178,140 @@ function M.placeGeoOnPoints(
 	avoidIntersections: boolean?,
 	radius: number?,
 	priority: number?,
-	branchId: any
+	run,
+	graphKey: string?,
+	ruleKey: string?,
+	ruleName: string?
 )
 	local instances = {}
 	radius = radius or 5
 	priority = priority or 0
+
+	-- The rule's own key doubles as the branch id, so a rule never rejects its
+	-- own placements -- fresh or promoted -- while a different rule does.
+	local branchId = ruleKey or templateGeo
+	local tracking = run ~= nil and graphKey ~= nil and ruleKey ~= nil
+
+	-- One folder per rule under ScatterGraphInstances, so the Explorer reads like
+	-- the graph and deleting a rule's folder by hand is a legible act.
+	local targetFolder = instanceFolder
+	if graphKey ~= nil and ruleName ~= nil then
+		local graphFolder = instanceFolder:FindFirstChild(graphKey)
+		if graphFolder == nil then
+			graphFolder = Instance.new("Folder")
+			graphFolder.Name = graphKey
+			graphFolder.Parent = instanceFolder
+		end
+		local ruleFolder = graphFolder:FindFirstChild(ruleName)
+		if ruleFolder == nil then
+			ruleFolder = Instance.new("Folder")
+			ruleFolder.Name = ruleName
+			ruleFolder.Parent = graphFolder
+		end
+		targetFolder = ruleFolder
+	end
+
+	-- Counts as evaluated even if no point survives, so its stale entries are
+	-- pruned rather than left to be misread as deletions next run.
+	if tracking then
+		run:markEvaluated(graphKey, ruleKey, ruleName)
+	end
+
+	local occByIndex = occurrenceIndices(points)
 
 	-- Branches that opt in to avoidance are deferred: their placements are
 	-- collected as candidates and resolved once, after every branch has been
 	-- evaluated, so the outcome is independent of branch evaluation order.
 	local defer = avoidIntersections == true and occupancy ~= nil
 
-	for _, p in points do
-		local instance = templateGeo:Clone()
-		instance.Parent = instanceFolder
-		instance:PivotTo(CFrame.new(p))
+	for index, p in points do
+		local xmm = PlacementLedger.qmm(p.X)
+		local zmm = PlacementLedger.qmm(p.Z)
+		local occ = occByIndex[index]
 
+		-- Draw the random stream first and unconditionally: a suppressed point
+		-- must consume the very same draws a placed one would, or deleting a
+		-- single prop would restyle every prop scattered after it.
 		local scale = 1
 		if scaleRange then
 			scale = scaleRange.X + math.random() * (scaleRange.Y - scaleRange.X)
 		end
-		instance:ScaleTo(scale)
-
 		local tintColor = Color3.fromRGB(255, 255, 255)
 		if colorRange then
 			tintColor = M.evalColorSequence(colorRange, math.random())
 		end
-		for _, d in instance:GetDescendants() do
-			if d:IsA("MeshPart") then
-				local noTint = CollectionService:HasTag(d, "NoTint")
-				if not noTint then
-					for _, sa in d:GetDescendants() do
-						if sa:IsA("SurfaceAppearance") then
-							sa.Color = tintColor
+		local rotation = nil
+		if rotationType == "Random" then
+			rotation = CFrame.Angles(2 * math.random() * math.pi, 2 * math.random() * math.pi, 2 * math.random() * math.pi)
+		elseif rotationType == "UpAxis" then
+			rotation = CFrame.fromAxisAngle(Vector3.new(0, 1, 0), math.random() * math.pi * 2)
+		end
+
+		local place = not tracking or run:shouldPlace(graphKey, ruleKey, xmm, zmm, occ)
+		if place then
+			local instance = templateGeo:Clone()
+			instance.Parent = targetFolder
+			instance:PivotTo(CFrame.new(p))
+			instance:ScaleTo(scale)
+
+			for _, d in instance:GetDescendants() do
+				if d:IsA("MeshPart") then
+					local noTint = CollectionService:HasTag(d, "NoTint")
+					if not noTint then
+						for _, sa in d:GetDescendants() do
+							if sa:IsA("SurfaceAppearance") then
+								sa.Color = tintColor
+							end
 						end
 					end
 				end
 			end
-		end
 
-		if rotationType == "Random" then
-			instance:PivotTo(instance:GetPivot() * CFrame.Angles(2 * math.random() * math.pi, 2 * math.random() * math.pi, 2 * math.random() * math.pi))
-		elseif rotationType == "UpAxis" then
-			instance:PivotTo(instance:GetPivot() * CFrame.fromAxisAngle(Vector3.new(0, 1, 0), math.random() * math.pi * 2))
-		end
-
-		-- The footprint is a circle of the given radius centered on the placement
-		-- point (rotation/scale pivot about p, so the center stays at p).
-		if defer then
-			-- Do not tag yet; resolveDeferred decides which candidates survive.
-			occupancy:addCandidate({
-				instance = instance,
-				x = p.X,
-				z = p.Z,
-				radius = radius,
-				priority = priority,
-				branchId = branchId,
-			})
-		else
-			CollectionService:AddTag(instance, "ScatterGraphInstance")
-			-- Register as an always-kept footprint so opt-in branches avoid it.
-			if occupancy then
-				occupancy:addSolid(p.X, p.Z, radius, branchId)
+			if rotation then
+				instance:PivotTo(instance:GetPivot() * rotation)
 			end
-			table.insert(instances, instance)
+
+			-- Where this came from and what it looks like, so the next run can
+			-- match it to its point and tell an untouched prop from an edited
+			-- one. The stamp is taken last, once every transform has landed.
+			if tracking then
+				instance:SetAttribute("ScatterGraph", graphKey)
+				instance:SetAttribute("ScatterRule", ruleKey)
+				instance:SetAttribute("ScatterOrigin", p)
+				instance:SetAttribute("ScatterOccurrence", occ)
+				instance:SetAttribute("ScatterRadius", radius)
+				instance:SetAttribute("ScatterStamp", PlacementStamp.stamp(instance))
+			end
+
+			-- The footprint is a circle of the given radius centered on the
+			-- placement point (rotation/scale pivot about p, so the center stays
+			-- at p).
+			if defer then
+				-- Do not tag or record yet; resolveDeferred decides which
+				-- candidates survive and records the winners.
+				occupancy:addCandidate({
+					instance = instance,
+					x = p.X,
+					z = p.Z,
+					xmm = xmm,
+					zmm = zmm,
+					occ = occ,
+					radius = radius,
+					priority = priority,
+					branchId = branchId,
+					ruleKey = ruleKey,
+				})
+			else
+				CollectionService:AddTag(instance, "ScatterGraphInstance")
+				-- Register as an always-kept footprint so opt-in branches avoid it.
+				if occupancy then
+					occupancy:addSolid(p.X, p.Z, radius, branchId)
+				end
+				if tracking then
+					run:recordPlaced(graphKey, ruleKey, xmm, zmm, occ)
+				end
+				table.insert(instances, instance)
+			end
 		end
 	end
 

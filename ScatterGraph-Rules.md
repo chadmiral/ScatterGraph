@@ -286,6 +286,48 @@ Both rules avoid each other regardless of evaluation order. Where a tree and a b
 
 ---
 
+## Persisting hand edits
+
+Placed instances can be edited by hand after a run and keep those edits through the next one. You do not have to mark anything: move, rotate, scale, retint, restructure or delete a placed instance, and the system notices and leaves your work alone.
+
+**How a placement remembers itself.** Every instance the placer creates is stamped with where it came from and what it looked like:
+
+| Attribute | Type | Written on | Meaning |
+|-----------|------|------------|---------|
+| **`ScatterGraph`** | `string` | Placed instance | Which graph placed it (the graph's name, or `Asset:<id>` for an asset-loaded graph). |
+| **`ScatterRule`** | `string` | Placed & promoted instance | Which rule placed it — the rule's **`RuleId`** if it has one, otherwise its name. |
+| **`ScatterOrigin`** | `Vector3` | Placed & promoted instance | The point the placer used. Only **X** and **Z** identify the placement; the height is shown for legibility but never matched on. |
+| **`ScatterOccurrence`** | `number` | Placed & promoted instance | Tells apart two placements of one rule that share an X and Z (ordered by height, then placement order). |
+| **`ScatterRadius`** | `number` | Placed & promoted instance | The footprint radius, so a promoted instance still contests space the way its rule does. |
+| **`ScatterStamp`** | `number` | Placed instance | A fingerprint folded from the pivot, scale, and every descendant's shape and look. Removed on promotion. |
+
+Height is deliberately never part of a placement's identity: it comes from the terrain raycast for a snapped rule and from the volume group's vertical span for a floating one, and both move for reasons that are not edits (sculpting terrain, moving or resizing a volume). Matching on **X** and **Z** alone means those legitimate shifts re-place cleanly, while a hand nudge — height included — is still caught by the stamp.
+
+**The deep stamp.** **`ScatterStamp`** is a single number folded from the instance's pivot and `Model` scale and, for every descendant in order, its class and name and — for a `BasePart` — its transform *relative to the pivot*, size, colour, material, transparency and anchored state, and for a `SurfaceAppearance` its colour. Relative transforms mean dragging or turning the whole model is caught by the pivot term while nudging one part inside it is caught by that part's term. Values are rounded to a thousandth before folding, so a save and reload does not read as an edit.
+
+**The ledger.** A run records what it placed so an absence can be told from a point that was never placed. Records live in **`Workspace.ScatterGraphRecords/<graph>/<rule>`** as a `StringValue` (base64 of packed entries; the readable name is the rule, the durable **`RuleId`** is an attribute). Each entry is in one of three states:
+
+- **placed** — the system owns a live instance here.
+- **promoted** — a hand-edited instance now claims this point; the system keeps clear of it.
+- **removed** — the author deleted it; never place here again.
+
+Only **placed** entries are ever pruned. **promoted** and **removed** entries persist across runs, so raising a volume onto a new plane, or nudging one sideways and back, never resurrects a prop you threw away.
+
+**What a run does.** Before placing, the run sweeps every tagged instance: an untouched one is destroyed and re-placed as before; an edited one is **promoted**. During placement, a point that is claimed or removed is skipped — while still drawing the same random values, so deleting one prop never restyles the ones scattered after it — and a placed point whose instance has vanished is recognised as a deletion and tombstoned. At the end, stale placed entries are pruned and the ledgers are written.
+
+**Promotion** untags **`ScatterGraphInstance`**, tags **`ScatterGraphPromoted`**, and reparents the instance into a flat **`Workspace.ScatterGraphPromoted`** folder, keeping its **`ScatterRule`** and **`ScatterOrigin`**. A promoted instance keeps asserting its point on every later run, and is registered into that run's occupancy at its **current** position, so **`AvoidIntersections`** rules keep clear of where you actually put it. Delete a promoted instance and its point flips to **removed**.
+
+**Commands** (Spreadsheet View rule ribbon):
+
+- **Promote Selection** — lifts the instances currently selected in Studio out of the system for good, whatever their stamp says. The escape hatch for an edit the stamp cannot see, or a prop you want held even though it is untouched.
+- **Forget Edits** — discards the selected rule's records and its promotions and removes the instances it had promoted, so the rule regenerates from nothing on the next run.
+
+**Clear Instances** destroys every placed instance and drops the ledgers' **placed** entries (keeping **promoted** and **removed**), so the next run does not misread the cleared props as hand deletions. Promoted instances are left untouched.
+
+A rule that loses a large fraction of its placements between runs — usually a folder deleted by hand rather than props edited one at a time — is called out with a warning suggesting **Forget Edits**. Instances placed before this feature existed carry no stamp and are destroyed on the first run after it lands, a clean reset with no false tombstones.
+
+---
+
 ## CollectionService tags
 
 | Tag | Applied to | Effect |
@@ -293,6 +335,8 @@ Both rules avoid each other regardless of evaluation order. Where a tree and a b
 | **`ScatterGraphVolume`** | `BasePart` | Volume evaluated by the plugin. Any [shape](#volume-shapes). Volumes sharing a biome definition are [unioned](#overlapping-volumes). |
 | **`ExclusionVolume`** | `BasePart` | Points inside this part are removed, using the part's actual [shape](#volume-shapes) and orientation. Applied after upstream evaluation in **`ScatterPointsAroundPoints`**, **`SnapPointsToTerrain`**, and **`PlaceGeometryOnPoints`**. |
 | **`NoTint`** | `MeshPart` | Skips color tinting from **`ColorRange`** on that part. |
+| **`ScatterGraphInstance`** | Placed instance | Applied to every instance the placer creates; marks it as the system's to sweep and re-place. Removed when the instance is promoted. |
+| **`ScatterGraphPromoted`** | Promoted instance | A hand-edited instance lifted out of the system (see [Persisting hand edits](#persisting-hand-edits)). Its point is kept clear on every run; deleting it retires the point for good. |
 
 ---
 
@@ -300,8 +344,10 @@ Both rules avoid each other regardless of evaluation order. Where a tree and a b
 
 | Instance | Location | Purpose |
 |----------|----------|---------|
-| **`ScatterGraphInstances`** | `Workspace` | Created automatically if missing. All placed geometry is parented here. |
+| **`ScatterGraphInstances`** | `Workspace` | Created automatically if missing. All placed geometry is parented here, in a `<graph>/<rule>` subfolder per rule. |
 | **`ScatterGraphs`** | `ReplicatedStorage` | Created automatically if missing. Holds biome graph definitions. |
+| **`ScatterGraphRecords`** | `Workspace` | Created on the first run that places anything. One `StringValue` per rule, holding the ledger that persists hand edits (see [Persisting hand edits](#persisting-hand-edits)). |
+| **`ScatterGraphPromoted`** | `Workspace` | Created on the first promotion. A flat folder holding every instance the author edited and the system stepped away from. |
 | **`Terrain`** | `Workspace` | Raycast target for **`SnapPointsToTerrain`**. |
 
 ---
@@ -316,11 +362,19 @@ Both rules avoid each other regardless of evaluation order. Where a tree and a b
 | `ScatterPoints` | `NodeType`, `Seed`, `Spacing` |
 | `ScatterPointsAroundPoints` | `NodeType`, `Seed`, `InnerRadius`, `OuterRadius`, `Count` |
 | `SnapPointsToTerrain` | `NodeType`, `MaterialFilter`, `SlopeFilter` |
-| `PlaceGeometryOnPoints` | `NodeType`, `GeometryAssetID`, `ScaleRange`, `RotationType`, `ColorRange`, `AvoidIntersections`, `Radius`, `Priority` |
+| `PlaceGeometryOnPoints` | `NodeType`, `GeometryAssetID`, `ScaleRange`, `RotationType`, `ColorRange`, `AvoidIntersections`, `Radius`, `Priority`, `RuleId` |
 | `Output` registry entry | `NodeType` = `OutputNode` |
 | Scatter volume | `Enabled`, `BiomeDefinitionAssetID` |
 | Wire: `Points` | `NodeType` = `Points` |
 | Wire: `Asset` | `NodeType` = `Asset` |
+
+A **`PlaceGeometryOnPoints`** node added from a rule template also carries
+**`RuleId`** (a `string` GUID), the rule's durable identity for the records that
+persist hand edits (see [Persisting hand edits](#persisting-hand-edits)). It lets
+those records survive renaming the node. Rules without one fall back to their
+name. Placed instances additionally carry `ScatterGraph`, `ScatterRule`,
+`ScatterOrigin`, `ScatterOccurrence`, `ScatterRadius` and `ScatterStamp`; those
+are written by the placer, not authored by hand.
 
 Any node may also carry **`GraphPosition`** (a `Vector2`), which is where the
 Graph View canvas last saw it dragged to. It is written only by dragging a node
@@ -345,4 +399,6 @@ lists. Deleting it just returns the node to the automatic column layout.
 | `src/shared/ScatterGraph/VolumeShape.luau` | Per-shape volume geometry: containment, footprint, and raycast extent for every part shape |
 | `src/shared/ScatterGraph/VolumeGroup.luau` | The volumes sharing one biome definition, queried as a single unioned region |
 | `src/shared/ScatterGraph/OccupancyStore.luau` | Spatial hash of placed footprint circles (center + `Radius`) for cross-branch intersection avoidance |
+| `src/shared/ScatterGraph/PlacementStamp.luau` | The deep fingerprint one placed instance folds down to, for telling an untouched placement from a hand-edited one |
+| `src/shared/ScatterGraph/PlacementLedger.luau` | The durable per-rule record of placed, promoted and removed points that persists hand edits across runs |
 | `src/shared/ScatterGraph/Nodes/` | Per-node evaluation logic |

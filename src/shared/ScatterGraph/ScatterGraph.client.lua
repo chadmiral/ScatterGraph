@@ -12,6 +12,7 @@ local SnapPointsToTerrainNode = require(script.Parent.Nodes:WaitForChild("SnapPo
 local ScatterPointsAroundPointsNode = require(script.Parent.Nodes:WaitForChild("ScatterPointsAroundPointsNode"))
 local Helpers = require(script.Parent:WaitForChild("ScatterGraphHelpers"))
 local OccupancyStore = require(script.Parent:WaitForChild("OccupancyStore"))
+local PlacementLedger = require(script.Parent:WaitForChild("PlacementLedger"))
 local VolumeGroup = require(script.Parent:WaitForChild("VolumeGroup"))
 local GraphView = require(script.Parent:WaitForChild("GraphView"))
 local RulesWindow = require(script.Parent:WaitForChild("RulesWindow"))
@@ -94,8 +95,15 @@ local evaluateNode
 -- volume in the group -- so later branches can avoid geometry placed by earlier
 -- ones, in any volume. Reset in evaluateGraph.
 local currentOccupancy = nil
+-- The run's ledger and the graph it is currently placing under, carried down to
+-- the terminal so each placement can be stamped and recorded. Both are set for
+-- the length of a single Evaluate press.
+local currentRun = nil
+local currentGraphKey = nil
 
-evaluateNode = function(n, volumes, terrain, debugString)
+-- ruleKey and ruleName reach the terminal from the Output entry that names the
+-- chain; every other node ignores them, so downstream calls leave them nil.
+evaluateNode = function(n, volumes, terrain, debugString, ruleKey, ruleName)
 	local exclusionFunctions = Helpers.exclusionZoneFunctions()
 
 	if n == nil then
@@ -120,14 +128,31 @@ evaluateNode = function(n, volumes, terrain, debugString)
 			instanceFolder = InstanceFolder,
 			insertService = InsertService,
 			occupancy = currentOccupancy,
+			run = currentRun,
+			graphKey = currentGraphKey,
+			ruleKey = ruleKey,
+			ruleName = ruleName,
 		})
 	else
 		warn("Invalid node encountered: "..n.Name)
 	end
 end
 
-local function evaluateGraph(g, volumes, terrain)
+local function evaluateGraph(g, volumes, terrain, graphKey)
+	currentGraphKey = graphKey
 	currentOccupancy = OccupancyStore.new()
+	currentOccupancy.run = currentRun
+	currentOccupancy.graphKey = graphKey
+
+	-- Instances the author edited and kept are solids at where they actually
+	-- sit, so AvoidIntersections rules keep clear of them, whatever the stamp of
+	-- their original placement said.
+	if currentRun ~= nil then
+		for _, claim in currentRun:promotedClaims(graphKey) do
+			currentOccupancy:addSolid(claim.x, claim.z, claim.radius, claim.ruleKey)
+		end
+	end
+
 	for _, node in pairs(g:GetChildren()) do
 		local nodeType = node:GetAttribute("NodeType")
 		if nodeType == "Output" then
@@ -197,26 +222,47 @@ local function onPluginButtonClicked()
 		InstanceFolder.Parent = workspace
 	end
 	
-	clearAllInstances()
-	
+	-- The sweep replaces the old clear: rather than destroying everything, it
+	-- promotes hand-edited instances out of the system and destroys only the
+	-- untouched ones, leaving the ledger knowing which points were live so the
+	-- placement pass below can tell a deletion from an ordinary re-run.
+	currentRun = PlacementLedger.beginRun()
+	currentRun:sweep()
+
 	for _, group in collectVolumeGroups() do
 		local scatterGraph = group.graph
+		local graphKey
 		if scatterGraph == nil then
 			local biomeAsset = InsertService:LoadAsset(group.assetID)
 			scatterGraph = biomeAsset:GetChildren()[1]
+			-- Asset-loaded graphs have no lasting instance, so they are keyed by
+			-- the id they were loaded from instead of a name.
+			graphKey = "Asset:" .. tostring(group.assetID)
+		else
+			graphKey = PlacementLedger.graphKey(scatterGraph)
 		end
 
 		if scatterGraph ~= nil then
-			evaluateGraph(scatterGraph, VolumeGroup.new(group.volumes), terrain)
+			evaluateGraph(scatterGraph, VolumeGroup.new(group.volumes), terrain, graphKey)
 		else
 			warn("Could not resolve a biome definition for volume "..group.volumes[1].Name)
 		end
 	end
+
+	-- Tombstone the deletions the sweep and placement uncovered, prune the
+	-- points no rule wants any more, and write every book.
+	currentRun:finishRun()
+	currentRun = nil
+	currentGraphKey = nil
 end
 
 local function onClearButtonClicked()
 	BrushToolActive = false
 	clearAllInstances()
+	-- The instances are gone, so their `placed` entries have to go too, or the
+	-- next Evaluate would read every one of them as a hand deletion and never
+	-- put them back. Promotions and tombstones are kept.
+	PlacementLedger.wipePlaced()
 end
 
 --[[

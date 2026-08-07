@@ -19,6 +19,8 @@
 	actually tunes afterwards.
 ]]
 
+local HttpService = game:GetService("HttpService")
+
 local RuleTemplates = {}
 
 -- The nodes shared between templates. Note that the terminal is named
@@ -172,6 +174,11 @@ function RuleTemplates.add(graph: Instance, template): (string, Instance, { Inst
 	-- The terminal has nothing to clone yet. The wire is created empty rather
 	-- than left out so the slot is visible in the Explorer and in both windows.
 	makeWire("Asset", "Asset", nil).Parent = upstream
+
+	-- The rule's durable identity, so the records that persist hand edits
+	-- (PlacementLedger) survive the node being renamed. Written on the terminal
+	-- because that is the node the Output entry points at.
+	upstream:SetAttribute("RuleId", HttpService:GenerateGUID(false))
 
 	folder.Parent = graph
 	makeWire(ruleName, "OutputNode", upstream).Parent = registry

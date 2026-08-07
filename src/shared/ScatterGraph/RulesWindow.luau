@@ -35,6 +35,7 @@ local GraphUi = require(script.Parent:WaitForChild("GraphUi"))
 local Graphs = require(script.Parent:WaitForChild("Graphs"))
 local NodeInspector = require(script.Parent:WaitForChild("NodeInspector"))
 local RuleTemplates = require(script.Parent:WaitForChild("RuleTemplates"))
+local PlacementLedger = require(script.Parent:WaitForChild("PlacementLedger"))
 
 local RulesWindow = {}
 
@@ -301,6 +302,48 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 		refreshRules()
 	end
 
+	-- The Output entry currently selected in the second pane, or nil.
+	local function selectedOutput(): ObjectValue?
+		local graph = activeGraph()
+		if graph == nil or selectedOutputName == nil then
+			return nil
+		end
+		for _, output in collectOutputs(graph) do
+			if output.Name == selectedOutputName then
+				return output
+			end
+		end
+		return nil
+	end
+
+	-- Keep whatever is selected in the Explorer, whatever the stamp says. The
+	-- escape hatch for an edit the deep stamp cannot see, or a prop the author
+	-- wants held even though it is untouched.
+	local function promoteSelection()
+		local promoted = 0
+		local acted = recorded("Promote ScatterGraph instances", function()
+			promoted = PlacementLedger.promoteSelection(Selection:Get())
+		end)
+		if acted and promoted == 0 then
+			warn("Promote Selection: nothing tagged as a ScatterGraph instance is selected.")
+		end
+	end
+
+	-- Throw away the selected rule's records and its promotions, so the next run
+	-- places it from nothing.
+	local function forgetEdits()
+		local graph = activeGraph()
+		local output = selectedOutput()
+		if graph == nil or output == nil then
+			return
+		end
+		local ruleKey = PlacementLedger.ruleKey(output)
+		local graphKey = PlacementLedger.graphKey(graph)
+		recorded("Forget ScatterGraph edits", function()
+			PlacementLedger.forget(graphKey, ruleKey)
+		end)
+	end
+
 	local function addTemplateRule(template)
 		local graph = activeGraph()
 		if graph == nil then
@@ -514,6 +557,24 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 				.. "rule also feeds from is left alone.",
 			requires = "output",
 			activate = deleteSelectedRule,
+		}).Parent = ruleRibbon
+		addRibbonButton({
+			icon = "\u{1F4CC}",
+			label = "Promote Selection",
+			tooltip = "Lifts the selected placed instances out of the ScatterGraph for good: the next run "
+				.. "leaves their points empty and never overwrites them, whatever their stamp says. Select "
+				.. "the instances in the Explorer or viewport first.",
+			requires = "none",
+			activate = promoteSelection,
+		}).Parent = ruleRibbon
+		addRibbonButton({
+			icon = "\u{1F9F9}",
+			label = "Forget Edits",
+			tooltip = "Discards the selected rule's memory of hand edits -- its promotions and its record of "
+				.. "deleted points -- and removes the instances it had promoted, so the next run places the "
+				.. "rule from nothing.",
+			requires = "output",
+			activate = forgetEdits,
 		}).Parent = ruleRibbon
 		-- One button per template, in the templates' own order and under their own
 		-- names, since the Graph view offers the same ones from the same place.
