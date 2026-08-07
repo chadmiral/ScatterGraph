@@ -2,8 +2,9 @@
 	SequenceEditor
 
 	A popout editor for the NumberSequence and ColorSequence attributes, opened
-	from the Rules window. It is a floating dock widget rather than an overlay
-	inside that window, so it can be moved aside and resized while you work.
+	from the attribute panel in either window. It is a floating dock widget
+	rather than an overlay inside the window that opened it, so it can be moved
+	aside and resized while you work.
 
 	Studio's own sequence editor cannot be opened by a plugin -- there is no API
 	for it -- so this is a rebuild of the parts that matter: drag a keypoint to

@@ -1,8 +1,8 @@
 --[[
 	RulesWindow
 
-	The "Rules" dock widget: an inspector and editor for the biome graphs in the
-	place, in three panes that read left to right.
+	The "Spreadsheet View" dock widget: an inspector and editor for the biome
+	graphs in the place, in three panes that read left to right.
 
 	The first lists every ScatterGraph the place contains. Picking one fills the
 	second with that graph's outputs -- the ObjectValue entries under its Output
@@ -12,26 +12,27 @@
 	pane is a NodeInspector, which the Graph view uses too.
 
 	This window shows a rule as a list, which suits reading and tuning one rule.
-	The Graph view, opened from the ribbon, shows the same graph as a canvas of
-	wired nodes, which suits rearranging it.
+	The Graph view, opened from its own toolbar button, shows the same graph as a
+	canvas of wired nodes, which suits rearranging it.
 
-	The Studio selection does not choose which graph is shown. It is what the
-	Asset editor reads to name the geometry a rule places, so a window that
-	followed it would empty itself in the middle of that gesture.
+	The Studio selection does not choose which graph is shown here -- the first
+	pane does. The selection is what the Asset editor reads to name the geometry
+	a rule places, so a window that followed it would empty itself in the middle
+	of that gesture. The Graph view, having no such list, does read it, but only
+	at the moment its button is clicked.
 
 	The two ribbon rows along the top edit what the panes below them show. The
-	upper row makes and deletes whole graphs, and opens one in the Graph view;
-	the lower one deletes the selected rule or adds one of the three chains that
-	cover almost every rule in practice. Every edit goes through GraphUi's
-	`recorded`, so ctrl-Z undoes it like any other Studio change.
+	upper row makes and deletes whole graphs; the lower one deletes the selected
+	rule or adds one of the three chains that cover almost every rule in
+	practice. Every edit goes through GraphUi's `recorded`, so ctrl-Z undoes it
+	like any other Studio change.
 ]]
 
-local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Selection = game:GetService("Selection")
 
 local GraphUi = require(script.Parent:WaitForChild("GraphUi"))
-local GraphView = require(script.Parent:WaitForChild("GraphView"))
+local Graphs = require(script.Parent:WaitForChild("Graphs"))
 local NodeInspector = require(script.Parent:WaitForChild("NodeInspector"))
 local RuleTemplates = require(script.Parent:WaitForChild("RuleTemplates"))
 
@@ -51,88 +52,9 @@ local indent = GraphUi.indent
 local makeLabel = GraphUi.makeLabel
 local recorded = GraphUi.recorded
 
--- Where a graph can be kept: the storage services by convention, and Workspace
--- because a graph is often left next to the volumes that use it.
-local SEARCH_ROOTS = {
-	ReplicatedStorage,
-	game:GetService("ServerStorage"),
-	workspace,
-}
-
 -- Where a graph goes when this window makes one, and the location the rest of
 -- the system expects to find graphs in.
 local GRAPH_FOLDER = "ScatterGraphs"
-
--- Skipped by the search below. After an evaluation this folder holds every
--- placed clone in the place, which can be more instances than everything else
--- put together, and a graph is never inside it.
-local INSTANCE_FOLDER = "ScatterGraphInstances"
-
-local function isGraph(instance: Instance): boolean
-	return instance:GetAttribute("NodeType") == "ScatterGraph"
-end
-
-local function searchForGraphs(container: Instance, found: { [Instance]: boolean }, graphs: { Instance })
-	for _, child in container:GetChildren() do
-		if isGraph(child) then
-			if not found[child] then
-				found[child] = true
-				table.insert(graphs, child)
-			end
-			-- Everything below a graph is its own nodes, never another graph.
-			continue
-		end
-
-		-- Geometry cannot contain a graph, and not descending into it is what
-		-- keeps this search cheap enough to run whenever the window redraws.
-		if child.Name == INSTANCE_FOLDER or child:IsA("BasePart") then
-			continue
-		end
-
-		searchForGraphs(child, found, graphs)
-	end
-end
-
-local function findGraphFromVolume(instance: Instance): Instance?
-	if not instance:IsA("BasePart") or not CollectionService:HasTag(instance, "ScatterGraphVolume") then
-		return nil
-	end
-
-	local reference = instance:FindFirstChildOfClass("ObjectValue")
-	return if reference ~= nil then reference.Value else nil
-end
-
--- Every graph the window can show. Volumes that name a definition by
--- BiomeDefinitionAssetID are not resolved: that graph does not exist until it
--- has been loaded, and nothing here is worth an asset fetch.
-local function collectGraphs(): { Instance }
-	local found = {}
-	local graphs = {}
-
-	for _, container in SEARCH_ROOTS do
-		searchForGraphs(container, found, graphs)
-	end
-
-	-- A volume may point at a graph kept somewhere the search does not reach.
-	-- Its reference outlives a deletion, though, so a graph reached this way has
-	-- to be checked for still being in the place at all.
-	for _, volume in CollectionService:GetTagged("ScatterGraphVolume") do
-		local graph = findGraphFromVolume(volume)
-		if graph ~= nil and isGraph(graph) and graph:IsDescendantOf(game) and not found[graph] then
-			found[graph] = true
-			table.insert(graphs, graph)
-		end
-	end
-
-	table.sort(graphs, function(a, b)
-		if a.Name == b.Name then
-			return a:GetFullName() < b:GetFullName()
-		end
-		return a.Name < b.Name
-	end)
-
-	return graphs
-end
 
 local function collectOutputs(graph: Instance): { ObjectValue }
 	local outputs = {}
@@ -246,9 +168,11 @@ end
 function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 	-- Three panes side by side need a wider window than two did.
 	local widgetInfo = DockWidgetPluginGuiInfo.new(Enum.InitialDockState.Float, false, false, 720, 400, 460, 240)
+	-- The id stays as it was named, whatever the window is called: it is what
+	-- Studio files the window's size and docking under between sessions.
 	local widget = pluginRef:CreateDockWidgetPluginGui("ScatterGraphRules", widgetInfo)
 	widget.Name = "ScatterGraphRules"
-	widget.Title = "ScatterGraph Rules"
+	widget.Title = "ScatterGraph Spreadsheet View"
 	widget.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
 	-- Rebuilt wholesale whenever what they show changes: these panes are small,
@@ -584,20 +508,6 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 			activate = deleteCurrentGraph,
 		}).Parent = graphRibbon
 		addRibbonButton({
-			icon = "\u{1F5FA}\u{FE0F}",
-			label = "Graph View",
-			tooltip = "Opens the selected graph as a node graph: every node on a canvas, wired to the ones "
-				.. "it feeds, where nodes can be added, moved, rewired and deleted.",
-			requires = "graph",
-			activate = function()
-				local graph = activeGraph()
-				if graph ~= nil then
-					GraphView.open(pluginRef, graph)
-				end
-			end,
-		}).Parent = graphRibbon
-
-		addRibbonButton({
 			icon = "\u{274C}",
 			label = "Delete",
 			tooltip = "Deletes the selected rule: its Output entry and the nodes feeding it. A node another "
@@ -722,7 +632,7 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 	-- graph the other two panes should be showing.
 	local function refreshGraphs(): boolean
 		local previous = activeGraph()
-		local graphs = collectGraphs()
+		local graphs = Graphs.inPlace()
 
 		local stillPresent = false
 		for _, graph in graphs do

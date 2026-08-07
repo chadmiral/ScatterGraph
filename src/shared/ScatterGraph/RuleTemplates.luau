@@ -8,8 +8,8 @@
 	naming the chain so the evaluator can find it. That is four nodes and four
 	wires to build by hand, so the shapes worth starting from are kept here.
 
-	Here rather than in either window because both offer them -- the Rules
-	window as ribbon buttons, the Graph view in the menu the right button opens
+	Here rather than in either window because both offer them -- the Spreadsheet
+	view as ribbon buttons, the Graph view in the menu the right button opens
 	-- which is also why the label, icon and tooltip of each one belong to the
 	template rather than to a button. Two windows offering the same rules under
 	different names would be two rules as far as an author can tell.

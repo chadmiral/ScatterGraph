@@ -335,8 +335,9 @@ lists. Deleting it just returns the node to the automatic column layout.
 |------|------|
 | `src/shared/ScatterGraph/ScatterGraph.client.lua` | Plugin entry; volume grouping, node registry, evaluation loop |
 | `src/shared/ScatterGraph/ScatterGraphHelpers.luau` | Terrain snap, clustering, placement, exclusion zones |
-| `src/shared/ScatterGraph/RulesWindow.luau` | "Rules" dock widget: lists the place's graphs and the chosen graph's outputs, edits the attributes and Asset wire of the nodes feeding each one, and adds or deletes both graphs and rules |
+| `src/shared/ScatterGraph/RulesWindow.luau` | "Spreadsheet View" dock widget: lists the place's graphs and the chosen graph's outputs, edits the attributes and Asset wire of the nodes feeding each one, and adds or deletes both graphs and rules |
 | `src/shared/ScatterGraph/GraphView.luau` | "Graph View" dock widget: one graph as a canvas of wired nodes that can be added, moved, rewired and deleted, beside the parameters of the selected node |
+| `src/shared/ScatterGraph/Graphs.luau` | Which graphs the place holds, and which one the Studio selection names for the Graph View button to open |
 | `src/shared/ScatterGraph/NodeInspector.luau` | The attribute panel both windows use: a row and a suitable editor for every value of every node it is given |
 | `src/shared/ScatterGraph/GraphUi.luau` | Shared window furniture: theme colours, the tooltip and dropdown Roblox does not provide, and the undo recording every edit runs inside |
 | `src/shared/ScatterGraph/AttributeSchema.luau` | Which values each node type takes, which editor it gets, and the description shown on hover |

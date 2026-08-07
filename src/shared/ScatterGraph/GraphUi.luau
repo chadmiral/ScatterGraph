@@ -1,8 +1,8 @@
 --[[
 	GraphUi
 
-	What the plugin's windows are built out of, kept in one place so the Rules
-	window and the Graph view look and behave alike.
+	What the plugin's windows are built out of, kept in one place so the
+	Spreadsheet view and the Graph view look and behave alike.
 
 	Roblox provides neither a tooltip nor a dropdown, so both are drawn here as
 	panels floated over the window that asked for one. An Overlay owns that pair

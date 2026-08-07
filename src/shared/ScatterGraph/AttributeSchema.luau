@@ -1,7 +1,7 @@
 --[[
 	AttributeSchema
 
-	Which values each node type takes, in the order the Rules window shows them,
+	Which values each node type takes, in the order the panels show them,
 	and what kind of editor each one needs. This is the one place that knows
 	RotationType is a fixed set of strings rather than free text, or that Radius
 	may be cleared because the runtime defaults it.
@@ -43,7 +43,7 @@ export type Descriptor = {
 	-- Name of a wire that takes precedence over this attribute at evaluation
 	-- time, so the row can say when it is being ignored.
 	supersededBy: string?,
-	-- What the Rules window shows on hover. Condensed from the node reference in
+	-- What a panel row shows on hover. Condensed from the node reference in
 	-- ScatterGraph-Rules.md, which stays the fuller account of the two.
 	description: string?,
 }
@@ -140,8 +140,12 @@ local SCHEMA: { [string]: { Descriptor } } = {
 			integer = true,
 			optional = true,
 			supersededBy = "Asset",
+			-- An id is not something anyone types from memory, so this field opens
+			-- the Packages browser instead of a caret.
+			browser = "packages",
 			description = "Published asset to load and clone instead of an in-scene template; the first "
-				.. "child of the loaded asset is used. Ignored while Asset is set.",
+				.. "child of the loaded asset is used. Click to pick from the packages this place uses, or "
+				.. "type an id into that window's search box. Ignored while Asset is set.",
 		},
 		{
 			name = "ScaleRange",

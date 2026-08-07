@@ -3,14 +3,15 @@
 
 	The attribute panel: every value of every node it is given, as a row with an
 	editor suited to the kind of value it is. AttributeSchema decides which
-	editor each one gets and what the row says on hover; sequences open in the
-	SequenceEditor popout.
+	editor each one gets and what the row says on hover. Two values are too big
+	for a row and open a window of their own: a sequence in the SequenceEditor,
+	and a published asset id in the PackagesBrowser.
 
 	A row's value is usually an attribute, but it can also be a child ObjectValue
 	-- that is how PlaceGeometryOnPoints points at the geometry it places -- and
 	both kinds read and write the same way from here.
 
-	Both windows use one of these. The Rules window shows the chain of nodes
+	Both windows use one of these. The Spreadsheet view shows the chain of nodes
 	feeding one output; the Graph view shows whichever node is selected on the
 	canvas. What to show is given as a function rather than a list, because a
 	rewire changes which nodes belong on screen and the panel rebuilds itself
@@ -21,6 +22,7 @@ local Selection = game:GetService("Selection")
 
 local AttributeSchema = require(script.Parent:WaitForChild("AttributeSchema"))
 local GraphUi = require(script.Parent:WaitForChild("GraphUi"))
+local PackagesBrowser = require(script.Parent:WaitForChild("PackagesBrowser"))
 local SequenceEditor = require(script.Parent:WaitForChild("SequenceEditor"))
 
 local NodeInspector = {}
@@ -135,16 +137,28 @@ function NodeInspector.new(pluginRef: Plugin, overlay)
 		return box
 	end
 
-	local function makeValueButton(text: string, unset: boolean): TextButton
+	-- `asField` dresses the button as one of the input boxes above instead of a
+	-- button, for a value that is still typed in spirit but is picked from a
+	-- window rather than typed into the row.
+	local function makeValueButton(text: string, unset: boolean, asField: boolean?): TextButton
 		local button = Instance.new("TextButton")
 		button.Position = UDim2.fromOffset(0, 2)
 		button.Size = UDim2.new(1, 0, 1, -4)
-		button.BackgroundColor3 = color(Enum.StudioStyleGuideColor.Button)
-		button.BorderColor3 = color(Enum.StudioStyleGuideColor.ButtonBorder)
+		button.BackgroundColor3 = color(
+			if asField
+				then Enum.StudioStyleGuideColor.InputFieldBackground
+				else Enum.StudioStyleGuideColor.Button
+		)
+		button.BorderColor3 = color(
+			if asField then Enum.StudioStyleGuideColor.InputFieldBorder else Enum.StudioStyleGuideColor.ButtonBorder
+		)
 		button.Font = Enum.Font.SourceSans
 		button.TextSize = 14
 		button.TextColor3 = color(
-			if unset then Enum.StudioStyleGuideColor.DimmedText else Enum.StudioStyleGuideColor.ButtonText
+			if unset
+				then Enum.StudioStyleGuideColor.DimmedText
+				elseif asField then Enum.StudioStyleGuideColor.MainText
+				else Enum.StudioStyleGuideColor.ButtonText
 		)
 		button.TextXAlignment = Enum.TextXAlignment.Left
 		button.TextTruncate = Enum.TextTruncate.AtEnd
@@ -197,6 +211,44 @@ function NodeInspector.new(pluginRef: Plugin, overlay)
 			end
 
 			commitValue(node, descriptor, if descriptor.integer then math.round(number) else number)
+		end)
+
+		return container
+	end
+
+	-- A published asset id, picked from the Packages browser rather than typed:
+	-- an id is fourteen digits nobody carries in their head, and the browser
+	-- knows the names. It still looks like the field it replaces, since it is
+	-- the same value being set, and the browser's search box takes an id for
+	-- when there is one to hand.
+	local function makePackageEditor(node: Instance, descriptor, value: any): Frame
+		local container = makeEditorContainer()
+
+		local function caption(name: string?): string
+			if value == nil then
+				return "(not set)"
+			end
+			return if name ~= nil then name .. "  (" .. string.format("%d", value) .. ")" else string.format("%d", value)
+		end
+
+		local button = makeValueButton(caption(PackagesBrowser.nameFor(value)), value == nil, true)
+		button.Parent = container
+
+		-- The name behind an id is a web lookup, so the field shows the id now and
+		-- says what it is once that lands -- if this row is still on screen by
+		-- then, since the panel rebuilds on every change.
+		if value ~= nil then
+			PackagesBrowser.resolveName(value, function(name)
+				if button.Parent ~= nil then
+					button.Text = caption(name)
+				end
+			end)
+		end
+
+		button.Activated:Connect(function()
+			PackagesBrowser.open(pluginRef, node.Name .. "." .. descriptor.name, value, function(id)
+				commitValue(node, descriptor, id)
+			end)
 		end)
 
 		return container
@@ -343,7 +395,9 @@ function NodeInspector.new(pluginRef: Plugin, overlay)
 	end
 
 	local function makeEditor(node: Instance, descriptor, value: any): Frame
-		if descriptor.kind == "number" or descriptor.kind == "string" then
+		if descriptor.browser == "packages" then
+			return makePackageEditor(node, descriptor, value)
+		elseif descriptor.kind == "number" or descriptor.kind == "string" then
 			return makeTextEditor(node, descriptor, value)
 		elseif descriptor.kind == "choice" then
 			return makeChoiceEditor(node, descriptor, value)
@@ -394,8 +448,13 @@ function NodeInspector.new(pluginRef: Plugin, overlay)
 		local editor = makeEditor(node, descriptor, readDescriptorValue(node, descriptor))
 		if superseded then
 			local box = editor:FindFirstChildOfClass("TextBox")
+			local button = editor:FindFirstChildOfClass("TextButton")
+
 			if box ~= nil then
 				box.PlaceholderText = "(" .. descriptor.supersededBy .. " is set)"
+			elseif button ~= nil and button.Text == "(not set)" then
+				-- A field that opens a picker has no placeholder to say it with.
+				button.Text = "(" .. descriptor.supersededBy .. " is set)"
 			end
 		end
 		editor.Parent = row

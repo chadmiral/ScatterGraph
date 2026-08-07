@@ -5,19 +5,24 @@
 	the nodes it feeds, with the parameters of whichever nodes are selected in a
 	panel down the right-hand side.
 
-	The Rules window shows a rule as a flat list, which suits reading and tuning
-	one rule at a time. This shows the shape of the whole thing, which is what
-	rearranging it needs. Both edit the same instances -- a node is a Model
+	The Spreadsheet view shows a rule as a flat list, which suits reading and
+	tuning one rule at a time. This shows the shape of the whole thing, which is
+	what rearranging it needs. Both edit the same instances -- a node is a Model
 	carrying a NodeType attribute, a connection is a child ObjectValue pointing
 	at the node upstream of it -- so either window can be left open while the
 	other is used, and each picks up the other's edits.
+
+	Its toolbar button says to show a graph but not which one, so the Studio
+	selection says: a graph, a node inside one or a volume that uses one all open
+	that graph, and a selection pointing at none of those reopens whatever the
+	window was last left showing.
 
 	The canvas is slid with the middle mouse button and zoomed with the wheel,
 	which leaves the left button free for the graph itself: picking nodes,
 	carrying them, and trailing a wire out of a port. Dragging it over empty
 	canvas boxes in everything the box touches, and shift adds to what is already
 	picked rather than starting again. The right button opens what can be added as
-	a menu -- the whole rules the Rules window offers, and the single nodes to
+	a menu -- the whole rules the Spreadsheet view offers, and the single nodes to
 	build a chain by hand -- and adds the one chosen where the menu was opened.
 
 	More than one node can be picked, so everything that acts on a selection acts
@@ -47,6 +52,7 @@ local AssetService = game:GetService("AssetService")
 local UserInputService = game:GetService("UserInputService")
 
 local GraphUi = require(script.Parent:WaitForChild("GraphUi"))
+local Graphs = require(script.Parent:WaitForChild("Graphs"))
 local NodeInspector = require(script.Parent:WaitForChild("NodeInspector"))
 local RuleTemplates = require(script.Parent:WaitForChild("RuleTemplates"))
 
@@ -541,7 +547,7 @@ local function create(pluginRef: Plugin)
 	-- Nodes are placed in columns by how far they are from a source, which puts
 	-- every wire left to right and reads the way the points flow, and in rows by
 	-- the rule they belong to, so a chain runs along its own line the way it
-	-- reads in the Rules window. The Output registry goes at the top of the last
+	-- reads in the Spreadsheet view. The Output registry goes at the top of the last
 	-- column, since every chain ends up pointing at it. A node with a stored
 	-- position overrides all of that.
 	local function computeLayout(nodes: { Instance })
@@ -812,7 +818,7 @@ local function create(pluginRef: Plugin)
 		end
 
 		-- Every picked node in one panel, each under its own heading: the panel
-		-- is built to show a list, which is how the Rules window uses it.
+		-- is built to show a list, which is how the Spreadsheet view uses it.
 		inspector.show(function()
 			local shown = {}
 
@@ -988,7 +994,7 @@ local function create(pluginRef: Plugin)
 				wire.Parent = nil
 			else
 				-- Elsewhere the empty wire stays, which is how the Explorer and
-				-- the Rules window keep showing the slot.
+				-- the Spreadsheet view keep showing the slot.
 				wire.Value = nil
 			end
 		end)
@@ -1527,7 +1533,7 @@ local function create(pluginRef: Plugin)
 	end
 
 	local function watchGraph(nodes: { Instance })
-		-- Nodes and wires can come and go from the Rules window, the Explorer,
+		-- Nodes and wires can come and go from the Spreadsheet view, the Explorer,
 		-- or an undo, and any of those is a different picture.
 		table.insert(graphConnections, graph.DescendantAdded:Connect(scheduleRebuild))
 		table.insert(graphConnections, graph.DescendantRemoving:Connect(scheduleRebuild))
@@ -1592,7 +1598,11 @@ local function create(pluginRef: Plugin)
 			widget.Title = "ScatterGraph Graph View"
 			table.clear(selection)
 			inputs = {}
-			showMessage("This graph is no longer in the place.")
+			-- Nothing to show either because the place holds no graph at all, or
+			-- because the one being shown has since gone.
+			showMessage(if graph == nil
+				then "No graph to show. Select one, or make one in the Spreadsheet view, then click Graph View."
+				else "This graph is no longer in the place.")
 			showInspector()
 			updateRibbon()
 			return
@@ -2129,6 +2139,23 @@ local function create(pluginRef: Plugin)
 		end
 	end)
 
+	-- Which graph the toolbar button opens. The selection is asked first, so
+	-- picking a graph out and clicking the button always shows that one; with
+	-- nothing selected the window comes back showing what it showed before, and
+	-- a window that has yet to show anything takes the first graph in the place.
+	local function graphToShow(): Instance?
+		local selected = Graphs.selected()
+		if selected ~= nil then
+			return selected
+		end
+
+		if graph ~= nil and graph:IsDescendantOf(game) then
+			return graph
+		end
+
+		return Graphs.inPlace()[1]
+	end
+
 	function self.show(newGraph: Instance)
 		local changed = newGraph ~= graph
 
@@ -2153,16 +2180,53 @@ local function create(pluginRef: Plugin)
 		end
 	end
 
+	function self.attach(button: PluginToolbarButton)
+		button.Click:Connect(function()
+			if widget.Enabled then
+				widget.Enabled = false
+				return
+			end
+
+			local wanted = graphToShow()
+			if wanted ~= nil then
+				self.show(wanted)
+			else
+				-- Nothing to show, but the window still opens: it is where the
+				-- reason why is written.
+				widget.Enabled = true
+			end
+		end)
+
+		widget:GetPropertyChangedSignal("Enabled"):Connect(function()
+			button:SetActive(widget.Enabled)
+		end)
+
+		button:SetActive(widget.Enabled)
+
+		-- Studio restores whether the window was open, which can put it up before
+		-- anything has chosen a graph for it.
+		if widget.Enabled then
+			local wanted = graphToShow()
+			if wanted ~= nil then
+				self.show(wanted)
+			elseif root == nil then
+				buildInterface()
+				rebuild()
+			end
+		end
+	end
+
 	return self
 end
 
--- Opens the given graph, reusing the window if it is already up.
-function GraphView.open(pluginRef: Plugin, graph: Instance)
+-- The button owns the window: clicking it opens the graph the selection names,
+-- or closes the window if it is already up.
+function GraphView.install(pluginRef: Plugin, button: PluginToolbarButton)
 	if view == nil then
 		view = create(pluginRef)
 	end
 
-	view.show(graph)
+	view.attach(button)
 end
 
 return GraphView

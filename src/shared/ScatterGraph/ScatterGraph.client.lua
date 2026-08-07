@@ -13,6 +13,7 @@ local ScatterPointsAroundPointsNode = require(script.Parent.Nodes:WaitForChild("
 local Helpers = require(script.Parent:WaitForChild("ScatterGraphHelpers"))
 local OccupancyStore = require(script.Parent:WaitForChild("OccupancyStore"))
 local VolumeGroup = require(script.Parent:WaitForChild("VolumeGroup"))
+local GraphView = require(script.Parent:WaitForChild("GraphView"))
 local RulesWindow = require(script.Parent:WaitForChild("RulesWindow"))
 
 local InstanceFolder = workspace:FindFirstChild("ScatterGraphInstances")
@@ -20,22 +21,57 @@ local InstanceFolder = workspace:FindFirstChild("ScatterGraphInstances")
 
 local toolbar = plugin:CreateToolbar("ScatterGraph")
 
--- A toolbar button takes an image, not a glyph. These are free public decals
--- rather than anything uploaded for this plugin, so they can in principle be
--- moderated away; the button falls back to no icon rather than breaking if that
--- happens. Each id is the decal's underlying image, which is what the Icon
--- property wants -- the decal id itself does not always resolve.
+-- A toolbar button takes an image, not a glyph. The first two are free public
+-- decals rather than anything uploaded for this plugin, so they can in
+-- principle be moderated away; the button falls back to no icon rather than
+-- breaking if that happens. Each id is the decal's underlying image, which is
+-- what the Icon property wants -- the decal id itself does not always resolve.
 local ICONS = {
 	evaluate = "rbxassetid://8772271242", -- pine tree, from decal 8772271280
 	clear = "rbxassetid://14002617467", -- trash can, from decal 14002617522
-	rules = "rbxassetid://76681380400497", -- pencil, from decal 128809752302807
+}
+
+-- The two view buttons borrow Studio's own art instead, which is on disk beside
+-- Studio rather than on the asset server: the node graph is the icon Studio
+-- gives the Animation Graph Editor, and the table is the one it gives
+-- UITableLayout, at the 32 pixel size a toolbar button draws. Studio ships a
+-- copy per theme, and the dark copy is drawn light, so which copy is used
+-- follows the theme -- see paintViewIcons.
+local VIEW_ICONS = {
+	graphView = "rbxasset://studio_svg_textures/Shared/WidgetIcons/%s/Large/AnimationGraphEditor.png",
+	spreadsheetView = "rbxasset://studio_svg_textures/Shared/InsertableObjects/%s/Standard/UITableLayout@2x.png",
 }
 
 local newScriptButton = toolbar:CreateButton("EvaluateScatterGraph", "Evaluate the Scatter Graph", ICONS.evaluate)
 local clearButton = toolbar:CreateButton("Clear Instances", "Clear all ScatterGraph Instances", ICONS.clear)
-local rulesButton = toolbar:CreateButton("Rules", "Browse and edit the rules of every ScatterGraph", ICONS.rules)
+local spreadsheetViewButton = toolbar:CreateButton(
+	"Spreadsheet View",
+	"Browse and edit the rules of every ScatterGraph as a list",
+	""
+)
+local graphViewButton = toolbar:CreateButton(
+	"Graph View",
+	"Opens the selected graph as a canvas of wired nodes, which can be added, moved, rewired and deleted",
+	""
+)
 --local brushButton = toolbar:CreateButton("Brush", "Enable Brush Mode", "")
 --local testButton = toolbar:CreateButton("Test", "Test Button", "")
+
+-- Studio's icons come in a Dark and a Light set, each drawn to sit on that
+-- theme's toolbar: the dark set is pale, and would all but vanish against the
+-- light one. Which set to use is read off the theme's own background rather than
+-- its name, so a theme that is neither of the two built-in ones still gets a
+-- legible icon.
+local function paintViewIcons()
+	local background = settings().Studio.Theme:GetColor(Enum.StudioStyleGuideColor.MainBackground)
+	local theme = if background.R + background.G + background.B < 1.5 then "Dark" else "Light"
+
+	spreadsheetViewButton.Icon = string.format(VIEW_ICONS.spreadsheetView, theme)
+	graphViewButton.Icon = string.format(VIEW_ICONS.graphView, theme)
+end
+
+paintViewIcons()
+settings().Studio.ThemeChanged:Connect(paintViewIcons)
 
 local function clearAllInstances()
 	local instances = CollectionService:GetTagged("ScatterGraphInstance")
@@ -199,8 +235,9 @@ end--]]
 
 newScriptButton.Click:Connect(onPluginButtonClicked)
 clearButton.Click:Connect(onClearButtonClicked)
--- The Rules widget owns its own button: clicking it toggles the dock widget.
-RulesWindow.install(plugin, rulesButton)
+-- Each view owns its own button: clicking it toggles that view's dock widget.
+RulesWindow.install(plugin, spreadsheetViewButton)
+GraphView.install(plugin, graphViewButton)
 --brushButton.Click:Connect(onBrushButtonClicked)
 --testButton.Click:Connect(onTestButtonClicked)
 
