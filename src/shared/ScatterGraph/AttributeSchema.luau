@@ -256,4 +256,46 @@ function AttributeSchema.rowsFor(node: Instance): { Descriptor }
 	return rows
 end
 
+-- What a node is missing that it cannot evaluate without, as a list of plain
+-- descriptions, empty when the node is complete. A required value is one the
+-- schema does not mark optional; a wire is missing unless it both exists and
+-- points at something. This is what the Graph view flags with a red border and
+-- a warning badge, rather than letting the node warn and carry on into an error
+-- or an empty result at evaluation time.
+function AttributeSchema.issues(node: Instance): { string }
+	local issues = {}
+	local nodeType = node:GetAttribute("NodeType")
+
+	for _, descriptor in SCHEMA[nodeType] or {} do
+		if not descriptor.optional then
+			local present
+			if descriptor.source == "wire" then
+				local wire = node:FindFirstChild(descriptor.name)
+				present = wire ~= nil and wire:IsA("ObjectValue") and wire.Value ~= nil
+			else
+				present = node:GetAttribute(descriptor.name) ~= nil
+			end
+
+			if not present then
+				table.insert(issues, descriptor.name .. " is not set.")
+			end
+		end
+	end
+
+	-- PlaceGeometryOnPoints has something to clone given either way -- an
+	-- in-scene Asset wire or a published GeometryAssetID -- so each is optional
+	-- on its own, but a node with neither places nothing.
+	if nodeType == "PlaceGeometryOnPoints" then
+		local assetWire = node:FindFirstChild("Asset")
+		local hasAsset = assetWire ~= nil and assetWire:IsA("ObjectValue") and assetWire.Value ~= nil
+		local hasAssetId = node:GetAttribute("GeometryAssetID") ~= nil
+
+		if not hasAsset and not hasAssetId then
+			table.insert(issues, "No geometry to place: set an Asset or a GeometryAssetID.")
+		end
+	end
+
+	return issues
+end
+
 return AttributeSchema

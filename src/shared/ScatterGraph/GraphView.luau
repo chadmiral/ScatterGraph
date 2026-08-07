@@ -55,6 +55,7 @@ local GraphUi = require(script.Parent:WaitForChild("GraphUi"))
 local Graphs = require(script.Parent:WaitForChild("Graphs"))
 local NodeInspector = require(script.Parent:WaitForChild("NodeInspector"))
 local RuleTemplates = require(script.Parent:WaitForChild("RuleTemplates"))
+local AttributeSchema = require(script.Parent:WaitForChild("AttributeSchema"))
 
 local GraphView = {}
 
@@ -114,6 +115,13 @@ local TITLE_SELECTED_LIFT = 0.3
 -- Draws the edge of a card against both the canvas behind it and the card
 -- itself, in either Studio theme, which the theme's own border colour does not.
 local NODE_BORDER = Color3.fromRGB(158, 158, 158)
+-- A node missing something it needs to evaluate -- a required attribute, or a
+-- PlaceGeometryOnPoints with neither an Asset nor a GeometryAssetID -- is drawn
+-- with this border and a badge of it in the corner. Fixed rather than a theme
+-- colour: an error reads as an error in either theme.
+local ERROR_COLOR = Color3.fromRGB(224, 71, 71)
+-- The warning badge over the top-right corner of an incomplete node.
+local BADGE_SIZE = 16
 -- Faint enough to read the nodes through the box being dragged over them.
 local MARQUEE_FILL = 0.85
 
@@ -795,10 +803,18 @@ local function create(pluginRef: Plugin)
 		for node, card in cards do
 			local isSelected = selection[node] == true
 
-			card.frame.BorderColor3 = if isSelected
-				then color(Enum.StudioStyleGuideColor.LinkText)
-				else NODE_BORDER
-			card.frame.BorderSizePixel = if isSelected then 2 else 1
+			-- A red border marks a node that cannot run, and it wins over the
+			-- selection colour so the error stays visible while the node is
+			-- picked -- the strip lift below still shows that it is selected.
+			if card.invalid then
+				card.frame.BorderColor3 = ERROR_COLOR
+				card.frame.BorderSizePixel = 2
+			else
+				card.frame.BorderColor3 = if isSelected
+					then color(Enum.StudioStyleGuideColor.LinkText)
+					else NODE_BORDER
+				card.frame.BorderSizePixel = if isSelected then 2 else 1
+			end
 			-- Selection lightens the type colour rather than replacing it, so a
 			-- selected node still says what it is.
 			card.strip.BackgroundColor3 = if isSelected
@@ -1388,6 +1404,7 @@ local function create(pluginRef: Plugin)
 	local function makeCard(node: Instance)
 		local ports = inputs[node]
 		local origin = positions[node] or Vector2.zero
+		local issues = AttributeSchema.issues(node)
 
 		-- A button rather than a frame, for the same reason the ports are: only a
 		-- button is handed the press it is under. A frame here is passed over in
@@ -1433,7 +1450,36 @@ local function create(pluginRef: Plugin)
 			ruleLabel.Parent = frame
 		end
 
-		cards[node] = { frame = frame, strip = strip, tint = tint }
+		cards[node] = { frame = frame, strip = strip, tint = tint, invalid = #issues > 0 }
+
+		-- A node that cannot evaluate wears a red badge over its top-right
+		-- corner; hovering it explains what is missing. The badge takes no input
+		-- of its own, so a grab on it still carries the node like the strip does.
+		if #issues > 0 then
+			local badge = Instance.new("TextLabel")
+			badge.AnchorPoint = Vector2.new(0.5, 0.5)
+			badge.Position = UDim2.new(1, 0, 0, 0)
+			badge.Size = UDim2.fromOffset(BADGE_SIZE, BADGE_SIZE)
+			badge.BackgroundColor3 = ERROR_COLOR
+			badge.BorderColor3 = TITLE_TEXT
+			badge.BorderSizePixel = 1
+			badge.Font = Enum.Font.SourceSansBold
+			badge.TextSize = 14
+			badge.TextColor3 = TITLE_TEXT
+			badge.Text = "!"
+			badge.ZIndex = 6
+			badge.Parent = frame
+
+			local corner = Instance.new("UICorner")
+			corner.CornerRadius = UDim.new(1, 0)
+			corner.Parent = badge
+
+			local lines = { "This node is missing something it needs:" }
+			for _, issue in issues do
+				table.insert(lines, "\u{2022}  " .. issue)
+			end
+			overlay.watchForTooltip(badge, table.concat(lines, "\n"))
+		end
 
 		if not isOutput(node) then
 			local port = makePort(frame, Vector2.new(NODE_WIDTH, TITLE_HEIGHT + PORT_ROW / 2), true)
