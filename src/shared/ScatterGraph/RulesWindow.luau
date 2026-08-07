@@ -33,6 +33,7 @@ local Selection = game:GetService("Selection")
 local GraphUi = require(script.Parent:WaitForChild("GraphUi"))
 local GraphView = require(script.Parent:WaitForChild("GraphView"))
 local NodeInspector = require(script.Parent:WaitForChild("NodeInspector"))
+local RuleTemplates = require(script.Parent:WaitForChild("RuleTemplates"))
 
 local RulesWindow = {}
 
@@ -172,87 +173,6 @@ local function collectUpstreamNodes(node: Instance?, visited: { [Instance]: bool
 	table.insert(ordered, node)
 end
 
--- The rule templates the ribbon can add. Each is a chain listed source-first;
--- every node is wired to the one before it by a Points wire, and the last node
--- is the terminal the Output entry points at. Note that the terminal is named
--- PlaceAssetOnPoints while its NodeType is PlaceGeometryOnPoints -- the two
--- differ throughout the existing graphs, and the registry keys off the
--- attribute.
---
--- The values here are only a starting point: a rule is not finished until its
--- Asset wire has a template to clone, and spacing and filters are what the
--- author actually tunes.
-local SCATTER_POINTS = { name = "ScatterPoints", nodeType = "ScatterPoints", attributes = { Seed = 1, Spacing = 40 } }
-
-local SNAP_TO_TERRAIN = {
-	name = "SnapPointsToTerrain",
-	nodeType = "SnapPointsToTerrain",
-	attributes = { MaterialFilter = "Water", SlopeFilter = NumberSequence.new(1, 0) },
-}
-
-local PLACE_ASSET = {
-	name = "PlaceAssetOnPoints",
-	nodeType = "PlaceGeometryOnPoints",
-	attributes = { ScaleRange = Vector2.new(0.9, 1.1), RotationType = "UpAxis" },
-}
-
-local RULE_TEMPLATES = {
-	terrainProp = {
-		ruleName = "TerrainProp",
-		nodes = { SCATTER_POINTS, SNAP_TO_TERRAIN, PLACE_ASSET },
-	},
-	cluster = {
-		ruleName = "Cluster",
-		nodes = {
-			-- Cluster seeds are spaced further apart than a solo scatter, since
-			-- each one fills in with Count points of its own.
-			{ name = "ScatterPoints", nodeType = "ScatterPoints", attributes = { Seed = 1, Spacing = 60 } },
-			{
-				name = "ScatterPointsAroundPoints",
-				nodeType = "ScatterPointsAroundPoints",
-				attributes = { Seed = 2, InnerRadius = 0, OuterRadius = 8, Count = 20 },
-			},
-			SNAP_TO_TERRAIN,
-			PLACE_ASSET,
-		},
-	},
-	floatingProp = {
-		ruleName = "FloatingProp",
-		-- No terrain snap, so points stay at the middle of the volume's vertical
-		-- span. Rotation is unconstrained because nothing is standing on ground.
-		nodes = {
-			SCATTER_POINTS,
-			{
-				name = "PlaceAssetOnPoints",
-				nodeType = "PlaceGeometryOnPoints",
-				attributes = { ScaleRange = Vector2.new(0.9, 1.1), RotationType = "Random" },
-			},
-		},
-	},
-}
-
-local function makeWire(name: string, nodeType: string, value: Instance?): ObjectValue
-	local wire = Instance.new("ObjectValue")
-	wire.Name = name
-	wire.Value = value
-	wire:SetAttribute("NodeType", nodeType)
-	return wire
-end
-
-local function findOutputRegistry(graph: Instance): Instance
-	for _, child in graph:GetChildren() do
-		if child:GetAttribute("NodeType") == "Output" then
-			return child
-		end
-	end
-
-	local registry = Instance.new("Model")
-	registry.Name = "Output"
-	registry:SetAttribute("NodeType", "Output")
-	registry.Parent = graph
-	return registry
-end
-
 -- Makes the graph folder if the place has never held a graph before, which is
 -- what the evaluator does with it too.
 local function findGraphFolder(): Instance
@@ -283,58 +203,10 @@ local function makeGraph(): Instance
 	-- Made now rather than with the first rule so the graph is a complete,
 	-- evaluable one from the moment it exists -- an empty registry places
 	-- nothing, but a missing one is a graph the evaluator cannot read.
-	findOutputRegistry(graph)
+	RuleTemplates.findOutputRegistry(graph)
 	graph.Parent = container
 
 	return graph
-end
-
--- Rule names have to be unique twice over: the rule folder sits under the graph
--- root and the registry entry under Output, and the two share the name.
-local function uniqueRuleName(graph: Instance, registry: Instance, base: string): string
-	local name = base
-	local suffix = 1
-
-	while graph:FindFirstChild(name) ~= nil or registry:FindFirstChild(name) ~= nil do
-		suffix += 1
-		name = base .. suffix
-	end
-
-	return name
-end
-
-local function addRule(graph: Instance, template): (string, Instance)
-	local registry = findOutputRegistry(graph)
-	local ruleName = uniqueRuleName(graph, registry, template.ruleName)
-
-	local folder = Instance.new("Folder")
-	folder.Name = ruleName
-
-	local upstream = nil
-	for _, spec in template.nodes do
-		local node = Instance.new("Model")
-		node.Name = spec.name
-		for attribute, value in spec.attributes do
-			node:SetAttribute(attribute, value)
-		end
-		node:SetAttribute("NodeType", spec.nodeType)
-
-		if upstream ~= nil then
-			makeWire("Points", "Points", upstream).Parent = node
-		end
-
-		node.Parent = folder
-		upstream = node
-	end
-
-	-- The terminal has nothing to clone yet. The wire is created empty rather
-	-- than left out so the slot is visible in the Explorer and in this window.
-	makeWire("Asset", "Asset", nil).Parent = upstream
-
-	folder.Parent = graph
-	makeWire(ruleName, "OutputNode", upstream).Parent = registry
-
-	return ruleName, folder
 end
 
 -- Deletes the registry entry and the nodes behind it, but only the nodes this
@@ -513,7 +385,7 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 
 		local ruleName, folder
 		local added = recorded("Add ScatterGraph rule", function()
-			ruleName, folder = addRule(graph, template)
+			ruleName, folder = RuleTemplates.add(graph, template)
 		end)
 
 		if not added then
@@ -733,38 +605,19 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 			requires = "output",
 			activate = deleteSelectedRule,
 		}).Parent = ruleRibbon
-		addRibbonButton({
-			icon = "\u{1F332}",
-			label = "Terrain Prop",
-			tooltip = "Adds a rule that scatters points, drops them onto the terrain and places one asset at "
-				.. "each: ScatterPoints, SnapPointsToTerrain, PlaceAssetOnPoints. Set its Asset to finish it.",
-			requires = "graph",
-			activate = function()
-				addTemplateRule(RULE_TEMPLATES.terrainProp)
-			end,
-		}).Parent = ruleRibbon
-		addRibbonButton({
-			icon = "\u{1F33F}",
-			label = "Cluster",
-			tooltip = "Adds a rule that scatters points, spreads a clump around each one and drops those onto "
-				.. "the terrain: ScatterPoints, ScatterPointsAroundPoints, SnapPointsToTerrain, "
-				.. "PlaceAssetOnPoints. Set its Asset to finish it.",
-			requires = "graph",
-			activate = function()
-				addTemplateRule(RULE_TEMPLATES.cluster)
-			end,
-		}).Parent = ruleRibbon
-		addRibbonButton({
-			icon = "\u{1F426}",
-			label = "Floating Prop",
-			tooltip = "Adds a rule that places an asset at each scattered point without consulting the "
-				.. "terrain, for anything that hangs in the air: ScatterPoints, PlaceAssetOnPoints. Set its "
-				.. "Asset to finish it.",
-			requires = "graph",
-			activate = function()
-				addTemplateRule(RULE_TEMPLATES.floatingProp)
-			end,
-		}).Parent = ruleRibbon
+		-- One button per template, in the templates' own order and under their own
+		-- names, since the Graph view offers the same ones from the same place.
+		for _, template in RuleTemplates.ordered do
+			addRibbonButton({
+				icon = template.icon,
+				label = template.label,
+				tooltip = template.tooltip,
+				requires = "graph",
+				activate = function()
+					addTemplateRule(template)
+				end,
+			}).Parent = ruleRibbon
+		end
 
 		local paneTop = (RIBBON_HEIGHT + 1) * 2
 		makeEdge(paneTop - 1)

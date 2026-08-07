@@ -33,11 +33,38 @@ GraphUi.TOOLTIP_DELAY = 0.4
 
 local PADDING = GraphUi.PADDING
 local ROW_HEIGHT = GraphUi.ROW_HEIGHT
+local SECTION_HEIGHT = GraphUi.SECTION_HEIGHT
 local TOOLTIP_WIDTH = GraphUi.TOOLTIP_WIDTH
 local TOOLTIP_DELAY = GraphUi.TOOLTIP_DELAY
 -- What a menu opened at the pointer is given to work with, having no button
 -- underneath it to take its width from.
 local MENU_WIDTH = 168
+-- A divider is a line with a little air either side of it, so the groups it
+-- separates read as groups rather than as a list with a stripe through it.
+local DIVIDER_HEIGHT = 7
+
+-- How tall a row is, by what the row is: a heading over a group, a line between
+-- two groups, or something to pick. A list's height is the sum of these rather
+-- than its item count times a row, now that not every row is a row.
+local function rowHeight(item): number
+	if item.kind == "header" then
+		return SECTION_HEIGHT
+	elseif item.kind == "divider" then
+		return DIVIDER_HEIGHT
+	end
+
+	return ROW_HEIGHT
+end
+
+local function listHeight(items): number
+	local height = 0
+
+	for _, item in items do
+		height += rowHeight(item)
+	end
+
+	return height
+end
 
 function GraphUi.color(guideColor: Enum.StudioStyleGuideColor, modifier: Enum.StudioStyleGuideModifier?): Color3
 	return settings().Studio.Theme:GetColor(guideColor, modifier)
@@ -248,8 +275,13 @@ function GraphUi.newOverlay()
 
 	-- A list floated over the window on a full-window backdrop that dismisses it
 	-- when clicked, at a place already worked out. Items are
-	-- { text, activate, enabled }; an item without an action, or with enabled
-	-- false, is a line of text the menu shows but does not offer.
+	-- { text, activate, enabled, icon, kind }; an item without an action, or with
+	-- enabled false, is a line of text the menu shows but does not offer.
+	--
+	-- A kind of "header" is a heading over the rows below it and a "divider" is a
+	-- line between two groups of them; neither is pickable. An icon is drawn
+	-- ahead of the text the way the ribbon draws one, which is what marks a row
+	-- out as doing more than the plain rows around it.
 	local function openList(items, at: Vector2, width: number)
 		overlay.closeDropdown()
 
@@ -275,7 +307,7 @@ function GraphUi.newOverlay()
 		end)
 
 		local list = Instance.new("Frame")
-		list.Size = UDim2.fromOffset(width, #items * ROW_HEIGHT)
+		list.Size = UDim2.fromOffset(width, listHeight(items))
 		list.Position = UDim2.fromOffset(at.X, at.Y)
 		list.BackgroundColor3 = GraphUi.color(Enum.StudioStyleGuideColor.MainBackground)
 		list.BorderColor3 = GraphUi.color(Enum.StudioStyleGuideColor.Border)
@@ -287,34 +319,64 @@ function GraphUi.newOverlay()
 		layout.Parent = list
 
 		for index, item in items do
-			local enabled = item.activate ~= nil and item.enabled ~= false
+			if item.kind == "header" then
+				local header = GraphUi.makeLabel(item.text, GraphUi.color(Enum.StudioStyleGuideColor.BrightText), true)
+				header.Size = UDim2.new(1, 0, 0, SECTION_HEIGHT)
+				header.LayoutOrder = index
+				header.BackgroundColor3 = GraphUi.color(Enum.StudioStyleGuideColor.Titlebar)
+				header.BackgroundTransparency = 0
+				header.BorderSizePixel = 0
+				header.ZIndex = 11
+				GraphUi.indent(header)
+				header.Parent = list
+			elseif item.kind == "divider" then
+				-- The line sits in a taller empty row rather than being the row,
+				-- which is where the air either side of it comes from.
+				local gap = Instance.new("Frame")
+				gap.Size = UDim2.new(1, 0, 0, DIVIDER_HEIGHT)
+				gap.LayoutOrder = index
+				gap.BackgroundTransparency = 1
+				gap.BorderSizePixel = 0
+				gap.ZIndex = 11
+				gap.Parent = list
 
-			local button = Instance.new("TextButton")
-			button.Size = UDim2.new(1, 0, 0, ROW_HEIGHT)
-			button.LayoutOrder = index
-			button.BackgroundColor3 = GraphUi.color(Enum.StudioStyleGuideColor.TableItem)
-			button.BorderSizePixel = 0
-			button.AutoButtonColor = enabled
-			button.Font = Enum.Font.SourceSans
-			button.TextSize = 14
-			button.TextColor3 = GraphUi.color(
-				if enabled then Enum.StudioStyleGuideColor.MainText else Enum.StudioStyleGuideColor.DimmedText
-			)
-			button.TextXAlignment = Enum.TextXAlignment.Left
-			button.TextTruncate = Enum.TextTruncate.AtEnd
-			button.Text = item.text
-			button.ZIndex = 11
-			GraphUi.indent(button)
-			button.Parent = list
+				local line = Instance.new("Frame")
+				line.Position = UDim2.fromOffset(0, math.floor(DIVIDER_HEIGHT / 2))
+				line.Size = UDim2.new(1, 0, 0, 1)
+				line.BackgroundColor3 = GraphUi.color(Enum.StudioStyleGuideColor.Border)
+				line.BorderSizePixel = 0
+				line.ZIndex = 11
+				line.Parent = gap
+			else
+				local enabled = item.activate ~= nil and item.enabled ~= false
 
-			button.Activated:Connect(function()
-				if not enabled then
-					return
-				end
+				local button = Instance.new("TextButton")
+				button.Size = UDim2.new(1, 0, 0, ROW_HEIGHT)
+				button.LayoutOrder = index
+				button.BackgroundColor3 = GraphUi.color(Enum.StudioStyleGuideColor.TableItem)
+				button.BorderSizePixel = 0
+				button.AutoButtonColor = enabled
+				button.Font = Enum.Font.SourceSans
+				button.TextSize = 14
+				button.TextColor3 = GraphUi.color(
+					if enabled then Enum.StudioStyleGuideColor.MainText else Enum.StudioStyleGuideColor.DimmedText
+				)
+				button.TextXAlignment = Enum.TextXAlignment.Left
+				button.TextTruncate = Enum.TextTruncate.AtEnd
+				button.Text = if item.icon ~= nil then item.icon .. "  " .. item.text else item.text
+				button.ZIndex = 11
+				GraphUi.indent(button)
+				button.Parent = list
 
-				overlay.closeDropdown()
-				item.activate()
-			end)
+				button.Activated:Connect(function()
+					if not enabled then
+						return
+					end
+
+					overlay.closeDropdown()
+					item.activate()
+				end)
+			end
 		end
 	end
 
@@ -325,7 +387,7 @@ function GraphUi.newOverlay()
 			return
 		end
 
-		local height = #items * ROW_HEIGHT
+		local height = listHeight(items)
 		local offset = anchor.AbsolutePosition - root.AbsolutePosition
 		local below = offset.Y + anchor.AbsoluteSize.Y
 
@@ -343,7 +405,7 @@ function GraphUi.newOverlay()
 			return
 		end
 
-		local height = #items * ROW_HEIGHT
+		local height = listHeight(items)
 		local size = root.AbsoluteSize
 
 		-- Falls down and to the right of the pointer, and the other way at the

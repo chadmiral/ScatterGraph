@@ -16,8 +16,9 @@
 	which leaves the left button free for the graph itself: picking nodes,
 	carrying them, and trailing a wire out of a port. Dragging it over empty
 	canvas boxes in everything the box touches, and shift adds to what is already
-	picked rather than starting again. The right button opens the node types as a
-	menu, and adds the one chosen where the menu was opened.
+	picked rather than starting again. The right button opens what can be added as
+	a menu -- the whole rules the Rules window offers, and the single nodes to
+	build a chain by hand -- and adds the one chosen where the menu was opened.
 
 	More than one node can be picked, so everything that acts on a selection acts
 	on all of it: the panel shows each picked node under its own heading, a drag
@@ -47,6 +48,7 @@ local UserInputService = game:GetService("UserInputService")
 
 local GraphUi = require(script.Parent:WaitForChild("GraphUi"))
 local NodeInspector = require(script.Parent:WaitForChild("NodeInspector"))
+local RuleTemplates = require(script.Parent:WaitForChild("RuleTemplates"))
 
 local GraphView = {}
 
@@ -129,9 +131,9 @@ local PARAM_COLUMN = 0.32
 -- graph the runtime evaluates.
 local POSITION_ATTRIBUTE = "GraphPosition"
 
--- What "Add Node" offers. These values are a starting point for a node built by
--- hand; the Rules window's whole-rule templates tune the same attributes
--- further for the chain each one belongs to.
+-- The single nodes the add menu offers, below the whole rules from RuleTemplates.
+-- These values are a starting point for a node built by hand; a template tunes
+-- the same attributes further for the chain each one belongs to.
 local NODE_TEMPLATES = {
 	{
 		label = "Scatter Points",
@@ -1737,11 +1739,69 @@ local function create(pluginRef: Plugin)
 		end
 	end
 
-	-- Every node type the window can add, as menu items that put the node at a
-	-- given place. Shared by the ribbon's Add Node button and the right-click
-	-- menu, which differ only in where that place comes from.
-	local function nodeTemplateItems(at: Vector2)
+	-- A whole rule in one go: the chain the template describes, wired up and
+	-- registered as an output, laid out left to right from `at` the way the
+	-- columns would have laid it out anyway. Building the same thing a node at a
+	-- time is four nodes and four wires.
+	local function addRuleTemplate(template, at: Vector2)
+		if graph == nil or not graph:IsDescendantOf(game) then
+			return
+		end
+
+		local made = nil
+
+		local added = recorded("Add " .. template.label .. " rule", function()
+			-- Wiring a chain into the Output registry works the columns out again
+			-- for every node that has never been placed by hand.
+			pinPositions()
+
+			local _, _, nodes = RuleTemplates.add(graph, template)
+
+			-- Placed here rather than left to the layout, since the author pointed
+			-- at somewhere for this rule to go.
+			local corner = snapToGrid(at)
+			for index, node in nodes do
+				local along = Vector2.new((index - 1) * (NODE_WIDTH + COLUMN_GAP), 0)
+				node:SetAttribute(POSITION_ATTRIBUTE, snapToGrid(corner + along))
+			end
+
+			made = nodes
+		end)
+
+		if added and made ~= nil then
+			table.clear(selection)
+			for _, node in made do
+				if node.Parent ~= nil then
+					selection[node] = true
+				end
+			end
+			rebuild()
+		end
+	end
+
+	-- What the window can add, as menu items that put it at a given place: the
+	-- whole rules first under their own icons, then a line, then the single nodes
+	-- to build a chain out of by hand. Shared by the ribbon's Add Node button and
+	-- the right-click menu, which differ in where that place comes from and in
+	-- whether anything else on screen already says what the menu is for.
+	local function addMenuItems(at: Vector2, heading: string?)
 		local items = {}
+
+		if heading ~= nil then
+			table.insert(items, { kind = "header", text = heading })
+		end
+
+		for _, template in RuleTemplates.ordered do
+			table.insert(items, {
+				text = template.label,
+				icon = template.icon,
+				activate = function()
+					addRuleTemplate(template, at)
+				end,
+			})
+		end
+
+		table.insert(items, { kind = "divider" })
 
 		for _, template in NODE_TEMPLATES do
 			table.insert(items, {
@@ -1762,7 +1822,7 @@ local function create(pluginRef: Plugin)
 			return
 		end
 
-		overlay.openMenuAt(windowPoint(input), nodeTemplateItems(canvasPoint(input)))
+		overlay.openMenuAt(windowPoint(input), addMenuItems(canvasPoint(input), "Add Node"))
 	end
 
 	local function deleteSelected()
@@ -1879,11 +1939,13 @@ local function create(pluginRef: Plugin)
 		addButton = addRibbonButton({
 			icon = "\u{2795}",
 			label = "Add Node",
-			tooltip = "Adds a node to the graph, unwired, in the middle of the view. Right-click the canvas to "
-				.. "add one where the pointer is instead. Drag from its right-hand port to feed something with it.",
+			tooltip = "Adds a whole rule, or a single unwired node, in the middle of the view. Right-click the "
+				.. "canvas to add one where the pointer is instead. Drag from a node's right-hand port to feed "
+				.. "something with it.",
 			requires = "graph",
 			activate = function()
-				overlay.openDropdown(addButton, nodeTemplateItems(viewMiddle()))
+				-- No heading: the button it hangs from is already labelled.
+				overlay.openDropdown(addButton, addMenuItems(viewMiddle()))
 			end,
 		})
 		addButton.Parent = ribbon
