@@ -64,6 +64,9 @@ local PADDING = GraphUi.PADDING
 local HEADER_HEIGHT = GraphUi.HEADER_HEIGHT
 local RIBBON_HEIGHT = GraphUi.RIBBON_HEIGHT
 local BUTTON_HEIGHT = GraphUi.BUTTON_HEIGHT
+-- Where the canvas and panel begin: below both ribbon rows and the hairline
+-- under each. The divider drag reads this the same way the interface builds it.
+local PANE_TOP = (RIBBON_HEIGHT + 1) * 2
 
 local color = GraphUi.color
 local makeLabel = GraphUi.makeLabel
@@ -138,8 +141,13 @@ local GRID_DOT = Color3.fromRGB(80, 80, 80)
 -- more than twice as wide as it is deep, so the two never fight over a zoom.
 local GRID_MIN_SCREEN = 12
 local GRID_MAX_SCREEN = 44
--- Share of the window the parameter panel takes.
+-- Share of the window the parameter panel takes to begin with; the divider
+-- between it and the canvas can be dragged, so this is only the starting split.
 local PARAM_COLUMN = 0.32
+-- How far that drag can go, as the panel's share of the window: enough either
+-- way that neither the canvas nor the panel can be squeezed shut.
+local PARAM_COLUMN_MIN = 0.15
+local PARAM_COLUMN_MAX = 0.6
 
 -- Where a node remembers having been dragged to. Hidden from the parameter
 -- panel by AttributeSchema, since it belongs to this canvas rather than to the
@@ -393,6 +401,10 @@ local function create(pluginRef: Plugin)
 	local pan = Vector2.zero
 	local zoomStop = ZOOM_DEFAULT
 	local zoom = ZOOM_STOPS[zoomStop]
+	-- The panel's share of the window, moved by dragging the divider. Held here
+	-- rather than rebuilt from the constant so a theme change or a graph switch
+	-- keeps the width the author dragged it to.
+	local paramColumn = PARAM_COLUMN
 	-- Rebuilt on every redraw: where each node sits, what its slots are, and the
 	-- widgets drawn for it.
 	local positions: { [Instance]: Vector2 } = {}
@@ -407,6 +419,14 @@ local function create(pluginRef: Plugin)
 	-- The right-hand control on the node ribbon: it names the graph on screen and
 	-- drops down the list of every graph in the place to switch between them.
 	local graphChooser = nil
+	-- The movable seam between the canvas and the panel, and the state of a drag
+	-- of it. The frames are rebuilt with the interface; the fraction they are
+	-- drawn at lives further up, so a rebuild keeps the width it was dragged to.
+	local dividerFrame = nil
+	local dividerGrip = nil
+	local dividerHandle = nil
+	local paramPane = nil
+	local draggingDivider = false
 	local gridLayer = nil
 	-- Which tile the grid is currently drawn from, so the zoom crossing a stop is
 	-- the only thing that swaps it.
@@ -2022,6 +2042,73 @@ local function create(pluginRef: Plugin)
 		overlay.openDropdown(graphChooser, items)
 	end
 
+	-- Slides the frames the seam is drawn across to wherever the fraction now
+	-- sits. Scale-based throughout, so the split holds its proportions as the
+	-- window is resized.
+	local function applyPaneSplit()
+		if canvas == nil then
+			return
+		end
+
+		local left = 1 - paramColumn
+		canvas.Size = UDim2.new(left, 0, 1, -PANE_TOP)
+		dividerFrame.Position = UDim2.new(left, 0, 0, PANE_TOP)
+		dividerGrip.Position = UDim2.new(left, 0, 0, PANE_TOP)
+		paramPane.Position = UDim2.new(left, 1, 0, PANE_TOP)
+		paramPane.Size = UDim2.new(paramColumn, -1, 1, -PANE_TOP)
+	end
+
+	-- The seam brightens while it is hovered or grabbed, the cue that it moves,
+	-- since a plugin cannot readily swap in a resize cursor.
+	local function highlightDivider(on: boolean)
+		if dividerFrame == nil then
+			return
+		end
+
+		local accent =
+			color(if on then Enum.StudioStyleGuideColor.LinkText else Enum.StudioStyleGuideColor.Border)
+		dividerFrame.BackgroundColor3 = accent
+
+		if dividerHandle ~= nil then
+			dividerHandle.BorderColor3 = accent
+			local dots =
+				color(if on then Enum.StudioStyleGuideColor.LinkText else Enum.StudioStyleGuideColor.DimmedText)
+			for _, dot in dividerHandle:GetChildren() do
+				if dot:IsA("Frame") then
+					dot.BackgroundColor3 = dots
+				end
+			end
+		end
+	end
+
+	local function stopDividerDrag()
+		if not draggingDivider then
+			return
+		end
+		draggingDivider = false
+		highlightDivider(false)
+	end
+
+	-- Turns where the pointer sits across the window into the panel's share of
+	-- it, held back from either end so neither pane can be squeezed shut. The
+	-- release is left to the InputEnded handlers, the same way a node drag ends;
+	-- checking the button state here instead stopped the drag before it began,
+	-- since a plugin widget does not keep UserInputService's mouse state current.
+	local function dragDivider(input: InputObject)
+		if not draggingDivider or root == nil then
+			return
+		end
+
+		local width = root.AbsoluteSize.X
+		if width <= 0 then
+			return
+		end
+
+		local x = input.Position.X - root.AbsolutePosition.X
+		paramColumn = math.clamp(1 - x / width, PARAM_COLUMN_MIN, PARAM_COLUMN_MAX)
+		applyPaneSplit()
+	end
+
 	local function addRibbonButton(spec)
 		local button = Instance.new("TextButton")
 		button.Size = UDim2.new(0, 0, 0, BUTTON_HEIGHT)
@@ -2195,7 +2282,7 @@ local function create(pluginRef: Plugin)
 
 		canvas = Instance.new("Frame")
 		canvas.Position = UDim2.fromOffset(0, paneTop)
-		canvas.Size = UDim2.new(1 - PARAM_COLUMN, 0, 1, -paneTop)
+		canvas.Size = UDim2.new(1 - paramColumn, 0, 1, -paneTop)
 		canvas.BackgroundColor3 = color(Enum.StudioStyleGuideColor.ViewPortBackground)
 		canvas.BorderSizePixel = 0
 		-- Everything on the canvas is positioned in graph pixels and may sit
@@ -2275,17 +2362,112 @@ local function create(pluginRef: Plugin)
 		applyView()
 
 		local divider = Instance.new("Frame")
-		divider.Position = UDim2.new(1 - PARAM_COLUMN, 0, 0, paneTop)
 		divider.Size = UDim2.new(0, 1, 1, -paneTop)
 		divider.BackgroundColor3 = color(Enum.StudioStyleGuideColor.Border)
 		divider.BorderSizePixel = 0
 		divider.Parent = rootFrame
+		dividerFrame = divider
 
 		local pane = Instance.new("Frame")
-		pane.Position = UDim2.new(1 - PARAM_COLUMN, 1, 0, paneTop)
-		pane.Size = UDim2.new(PARAM_COLUMN, -1, 1, -paneTop)
 		pane.BackgroundTransparency = 1
 		pane.Parent = rootFrame
+		paramPane = pane
+
+		-- The hairline is too thin to hit, so a wider invisible strip straddles it
+		-- and takes the drag. Centred on the line so half of it laps onto each
+		-- side, and above the canvas background so a press starts a resize rather
+		-- than a marquee.
+		local grip = Instance.new("TextButton")
+		grip.AnchorPoint = Vector2.new(0.5, 0)
+		grip.Size = UDim2.new(0, 12, 1, -paneTop)
+		grip.BackgroundTransparency = 1
+		grip.Text = ""
+		grip.AutoButtonColor = false
+		grip.ZIndex = 5
+		grip.Parent = rootFrame
+		dividerGrip = grip
+
+		-- A raised pill of three dots, centred on the line, so the seam reads as
+		-- something to grab rather than just an edge between two panes. A child of
+		-- the grip, so it rides along as the seam moves, and not Active, so the
+		-- grip beneath it still takes the press.
+		local handle = Instance.new("Frame")
+		handle.AnchorPoint = Vector2.new(0.5, 0.5)
+		handle.Position = UDim2.new(0.5, 0, 0.5, 0)
+		handle.Size = UDim2.fromOffset(7, 34)
+		handle.BackgroundColor3 = color(Enum.StudioStyleGuideColor.Button)
+		handle.BorderColor3 = color(Enum.StudioStyleGuideColor.Border)
+		handle.BorderSizePixel = 1
+		handle.ZIndex = 6
+		handle.Parent = grip
+		dividerHandle = handle
+
+		local handleCorner = Instance.new("UICorner")
+		handleCorner.CornerRadius = UDim.new(0, 3)
+		handleCorner.Parent = handle
+
+		local dotLayout = Instance.new("UIListLayout")
+		dotLayout.FillDirection = Enum.FillDirection.Vertical
+		dotLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+		dotLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+		dotLayout.SortOrder = Enum.SortOrder.LayoutOrder
+		dotLayout.Padding = UDim.new(0, 3)
+		dotLayout.Parent = handle
+
+		for i = 1, 3 do
+			local dot = Instance.new("Frame")
+			dot.Size = UDim2.fromOffset(3, 3)
+			dot.BackgroundColor3 = color(Enum.StudioStyleGuideColor.DimmedText)
+			dot.BorderSizePixel = 0
+			dot.LayoutOrder = i
+			dot.ZIndex = 7
+			dot.Parent = handle
+
+			local dotCorner = Instance.new("UICorner")
+			dotCorner.CornerRadius = UDim.new(1, 0)
+			dotCorner.Parent = dot
+		end
+
+		grip.MouseEnter:Connect(function()
+			highlightDivider(true)
+		end)
+		grip.MouseLeave:Connect(function()
+			if not draggingDivider then
+				highlightDivider(false)
+			end
+		end)
+		grip.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 then
+				draggingDivider = true
+				highlightDivider(true)
+			end
+		end)
+
+		-- Movement and release come from the GUI objects the pointer is actually
+		-- over, not from UserInputService, which a plugin widget does not feed:
+		-- the grip while the seam keeps up with the pointer, and the canvas or the
+		-- root frame when a quick drag outruns it. dragDivider ignores a move made
+		-- when no drag is under way, so these are harmless when idle.
+		local function onDividerMove(input: InputObject)
+			if input.UserInputType == Enum.UserInputType.MouseMovement then
+				dragDivider(input)
+			end
+		end
+		local function onDividerRelease(input: InputObject)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 then
+				stopDividerDrag()
+			end
+		end
+
+		grip.InputChanged:Connect(onDividerMove)
+		grip.InputEnded:Connect(onDividerRelease)
+		background.InputChanged:Connect(onDividerMove)
+		background.InputEnded:Connect(onDividerRelease)
+		rootFrame.InputChanged:Connect(onDividerMove)
+		rootFrame.InputEnded:Connect(onDividerRelease)
+
+		-- Sizes and places all of the above from the fraction it currently holds.
+		applyPaneSplit()
 
 		local header = makeLabel("Parameters", color(Enum.StudioStyleGuideColor.SubText), true)
 		header.Size = UDim2.new(1, -PADDING * 2, 0, HEADER_HEIGHT)
@@ -2330,6 +2512,16 @@ local function create(pluginRef: Plugin)
 	-- Backstops for a release this window never sees, because it happened
 	-- outside the widget or over something that swallowed it.
 	UserInputService.InputEnded:Connect(endDragOnRelease)
+
+	-- A backstop for the divider, matching the one above: a release out over the
+	-- 3D view or another window, which the grip and the frames never see, still
+	-- ends the drag. Movement is read from those frames rather than from here,
+	-- since a plugin widget does not feed UserInputService its pointer moves.
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			stopDividerDrag()
+		end
+	end)
 
 	widget.WindowFocusReleased:Connect(endDrag)
 
