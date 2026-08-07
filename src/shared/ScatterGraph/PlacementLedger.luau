@@ -605,4 +605,18 @@ function PlacementLedger.forget(graphKey: string, ruleKey: string)
 	end
 end
 
+-- Forget every rule in the place at once: drop all books and discard every
+-- promotion, so the next run rebuilds everything from nothing. The full reset
+-- behind the toolbar's Forget Edits, which has no one rule to act on.
+function PlacementLedger.forgetAll()
+	local root = workspace:FindFirstChild(RECORDS_FOLDER)
+	if root ~= nil then
+		root:Destroy()
+	end
+
+	for _, instance in CollectionService:GetTagged(PROMOTED_TAG) do
+		instance:Destroy()
+	end
+end
+
 return PlacementLedger

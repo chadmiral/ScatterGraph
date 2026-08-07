@@ -1,6 +1,7 @@
 local CollectionService = game:GetService("CollectionService")
 local InsertService = game:GetService("InsertService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Selection = game:GetService("Selection")
 
 local BrushToolActive = false
 
@@ -16,6 +17,7 @@ local PlacementLedger = require(script.Parent:WaitForChild("PlacementLedger"))
 local VolumeGroup = require(script.Parent:WaitForChild("VolumeGroup"))
 local GraphView = require(script.Parent:WaitForChild("GraphView"))
 local RulesWindow = require(script.Parent:WaitForChild("RulesWindow"))
+local GraphUi = require(script.Parent:WaitForChild("GraphUi"))
 
 local InstanceFolder = workspace:FindFirstChild("ScatterGraphInstances")
 
@@ -32,19 +34,37 @@ local ICONS = {
 	clear = "rbxassetid://14002617467", -- trash can, from decal 14002617522
 }
 
--- The two view buttons borrow Studio's own art instead, which is on disk beside
+-- These four buttons borrow Studio's own art instead, which is on disk beside
 -- Studio rather than on the asset server: the node graph is the icon Studio
--- gives the Animation Graph Editor, and the table is the one it gives
--- UITableLayout, at the 32 pixel size a toolbar button draws. Studio ships a
--- copy per theme, and the dark copy is drawn light, so which copy is used
--- follows the theme -- see paintViewIcons.
-local VIEW_ICONS = {
+-- gives the Animation Graph Editor, the table the one it gives UITableLayout,
+-- the wireframe box the one it gives SelectionBox (Promote Selection keeps the
+-- selection), and the circular arrow the one it gives Rotate (Forget Edits
+-- resets a rule so it regenerates). Each is drawn at the 32 pixel size a toolbar
+-- button uses. Studio ships a copy per theme, and the dark copy is drawn light,
+-- so which copy is used follows the theme -- see paintStudioIcons. The %s is the
+-- theme name.
+local STUDIO_ICONS = {
 	graphView = "rbxasset://studio_svg_textures/Shared/WidgetIcons/%s/Large/AnimationGraphEditor.png",
 	spreadsheetView = "rbxasset://studio_svg_textures/Shared/InsertableObjects/%s/Standard/UITableLayout@2x.png",
+	promote = "rbxasset://studio_svg_textures/Shared/InsertableObjects/%s/Standard/SelectionBox@2x.png",
+	forget = "rbxasset://studio_svg_textures/Shared/InsertableObjects/%s/Standard/Rotate@2x.png",
 }
 
 local newScriptButton = toolbar:CreateButton("EvaluateScatterGraph", "Evaluate the Scatter Graph", ICONS.evaluate)
 local clearButton = toolbar:CreateButton("Clear Instances", "Clear all ScatterGraph Instances", ICONS.clear)
+local promoteButton = toolbar:CreateButton(
+	"Promote Selection",
+	"Lifts the selected placed instances out of the ScatterGraph for good: the next run leaves their points "
+		.. "empty and never overwrites them, whatever their stamp says. Select the instances in the Explorer "
+		.. "or viewport first.",
+	""
+)
+local forgetButton = toolbar:CreateButton(
+	"Forget Edits",
+	"Discards every rule's memory of hand edits -- all promotions and records of deleted points -- and removes "
+		.. "the instances they had promoted, so the next run places the whole place from nothing.",
+	""
+)
 local spreadsheetViewButton = toolbar:CreateButton(
 	"Spreadsheet View",
 	"Browse and edit the rules of every ScatterGraph as a list",
@@ -63,16 +83,18 @@ local graphViewButton = toolbar:CreateButton(
 -- light one. Which set to use is read off the theme's own background rather than
 -- its name, so a theme that is neither of the two built-in ones still gets a
 -- legible icon.
-local function paintViewIcons()
+local function paintStudioIcons()
 	local background = settings().Studio.Theme:GetColor(Enum.StudioStyleGuideColor.MainBackground)
 	local theme = if background.R + background.G + background.B < 1.5 then "Dark" else "Light"
 
-	spreadsheetViewButton.Icon = string.format(VIEW_ICONS.spreadsheetView, theme)
-	graphViewButton.Icon = string.format(VIEW_ICONS.graphView, theme)
+	spreadsheetViewButton.Icon = string.format(STUDIO_ICONS.spreadsheetView, theme)
+	graphViewButton.Icon = string.format(STUDIO_ICONS.graphView, theme)
+	promoteButton.Icon = string.format(STUDIO_ICONS.promote, theme)
+	forgetButton.Icon = string.format(STUDIO_ICONS.forget, theme)
 end
 
-paintViewIcons()
-settings().Studio.ThemeChanged:Connect(paintViewIcons)
+paintStudioIcons()
+settings().Studio.ThemeChanged:Connect(paintStudioIcons)
 
 local function clearAllInstances()
 	local instances = CollectionService:GetTagged("ScatterGraphInstance")
@@ -265,6 +287,27 @@ local function onClearButtonClicked()
 	PlacementLedger.wipePlaced()
 end
 
+-- Keep whatever is selected in the Explorer, whatever the stamp says. The
+-- escape hatch for an edit the deep stamp cannot see, or a prop the author
+-- wants held even though it is untouched.
+local function onPromoteButtonClicked()
+	local promoted = 0
+	local acted = GraphUi.recorded("Promote ScatterGraph instances", function()
+		promoted = PlacementLedger.promoteSelection(Selection:Get())
+	end)
+	if acted and promoted == 0 then
+		warn("Promote Selection: nothing tagged as a ScatterGraph instance is selected.")
+	end
+end
+
+-- Throw away every rule's records and its promotions across the whole place, so
+-- the next run rebuilds everything from nothing.
+local function onForgetButtonClicked()
+	GraphUi.recorded("Forget ScatterGraph edits", function()
+		PlacementLedger.forgetAll()
+	end)
+end
+
 --[[
 local function onBrushButtonClicked()
 	BrushToolActive = not BrushToolActive
@@ -281,6 +324,8 @@ end--]]
 
 newScriptButton.Click:Connect(onPluginButtonClicked)
 clearButton.Click:Connect(onClearButtonClicked)
+promoteButton.Click:Connect(onPromoteButtonClicked)
+forgetButton.Click:Connect(onForgetButtonClicked)
 -- Each view owns its own button: clicking it toggles that view's dock widget.
 RulesWindow.install(plugin, spreadsheetViewButton)
 GraphView.install(plugin, graphViewButton)
