@@ -68,6 +68,15 @@ local BUTTON_HEIGHT = GraphUi.BUTTON_HEIGHT
 -- under each. The divider drag reads this the same way the interface builds it.
 local PANE_TOP = (RIBBON_HEIGHT + 1) * 2
 
+-- What the hidden keyboard catcher is kept holding between keystrokes. A focused
+-- TextBox routes Delete, Backspace and a letter into editing its text rather
+-- than into InputBegan, so the shortcuts are read from what the key does to this
+-- seed instead: a delete key shortens it, a letter lengthens it. Several
+-- characters with the caret among them so a delete key finds one either side of
+-- it to remove, whichever direction the key works in.
+local KEY_CATCHER_SEED = "...."
+local KEY_CATCHER_CARET = 3
+
 local color = GraphUi.color
 local makeLabel = GraphUi.makeLabel
 local recorded = GraphUi.recorded
@@ -427,6 +436,11 @@ local function create(pluginRef: Plugin)
 	local dividerHandle = nil
 	local paramPane = nil
 	local draggingDivider = false
+	-- An invisible TextBox that exists only to hold keyboard focus. A DockWidget
+	-- feeds keys to neither UserInputService nor ContextActionService, and a
+	-- plain frame cannot take keyboard focus; a focused TextBox both hears the
+	-- keys and swallows them, so they never fall through to the 3D viewport.
+	local keyCatcher = nil
 	local gridLayer = nil
 	-- Which tile the grid is currently drawn from, so the zoom crossing a stop is
 	-- the only thing that swaps it.
@@ -539,6 +553,33 @@ local function create(pluginRef: Plugin)
 	-- it floats over the window in.
 	local function windowPoint(input: InputObject): Vector2
 		return Vector2.new(input.Position.X, input.Position.Y) - root.AbsolutePosition
+	end
+
+	-- True while the catcher's text is being reset in code, so the reset is not
+	-- mistaken for a keystroke by the handler that watches its text.
+	local reseedingKeyCatcher = false
+
+	-- Restores the seed and drops the caret back into the middle of it, ready for
+	-- the next key to shorten or lengthen it.
+	local function reseedKeyCatcher()
+		if keyCatcher == nil then
+			return
+		end
+
+		reseedingKeyCatcher = true
+		keyCatcher.Text = KEY_CATCHER_SEED
+		keyCatcher.CursorPosition = KEY_CATCHER_CARET
+		reseedingKeyCatcher = false
+	end
+
+	-- Points keyboard focus at the hidden catcher, which is what makes the view's
+	-- shortcuts fire and keeps their keys from reaching the viewport. Called when
+	-- the author turns to the view -- clicking in it, or the window taking focus.
+	local function grabKeyboard()
+		if keyCatcher ~= nil then
+			keyCatcher:CaptureFocus()
+			reseedKeyCatcher()
+		end
 	end
 
 	-- Which rule a node belongs to, where the graph says so. Every chain tends to
@@ -1567,6 +1608,7 @@ local function create(pluginRef: Plugin)
 				return
 			end
 
+			grabKeyboard()
 			pickForDrag(node)
 
 			-- Shift may have just taken this node out of the selection, which
@@ -1735,36 +1777,36 @@ local function create(pluginRef: Plugin)
 		end
 	end
 
-	-- Puts the whole graph on screen: the zoom comes down to a stop the nodes fit
-	-- inside and the canvas slides to centre them. This is the way back from a
-	-- pan or a zoom that has left the graph off the edge, so it has to answer for
-	-- both rather than only sliding.
-	local function frameAll()
+	-- Frames a set of nodes: the zoom comes down to a stop they fit inside and
+	-- the canvas slides to centre them. `only`, when given, frames just the nodes
+	-- it holds; otherwise every node on the canvas is framed. Returns whether it
+	-- found anything to frame, so a caller can fall back when it did not.
+	local function frameNodes(only: { [Instance]: boolean }?): boolean
 		local low, high = nil, nil
 
-		-- The far corner of a card as well as the near one, since a graph framed
-		-- by its top-left corners alone would run off the bottom and the right by
-		-- the size of the last node.
+		-- The far corner of a card as well as the near one, since nodes framed by
+		-- their top-left corners alone would run off the bottom and the right by
+		-- the size of the last one.
 		for node, position in positions do
-			local far = position + Vector2.new(NODE_WIDTH, nodeHeight(node))
-			low = if low == nil
-				then position
-				else Vector2.new(math.min(low.X, position.X), math.min(low.Y, position.Y))
-			high = if high == nil
-				then far
-				else Vector2.new(math.max(high.X, far.X), math.max(high.Y, far.Y))
+			if only == nil or only[node] then
+				local far = position + Vector2.new(NODE_WIDTH, nodeHeight(node))
+				low = if low == nil
+					then position
+					else Vector2.new(math.min(low.X, position.X), math.min(low.Y, position.Y))
+				high = if high == nil
+					then far
+					else Vector2.new(math.max(high.X, far.X), math.max(high.Y, far.Y))
+			end
 		end
 
 		if low == nil or high == nil then
-			pan = Vector2.zero
-			applyView()
-			return
+			return false
 		end
 
-		-- The largest stop the graph fits at, with a margin left round it so the
-		-- outermost nodes are not flush against the edge. Never past actual size,
-		-- however few nodes there are: a two node graph blown up to fill the
-		-- canvas is not what asking to see all of it means.
+		-- The largest stop the nodes fit at, with a margin left round them so the
+		-- outermost are not flush against the edge. Never past actual size,
+		-- however few there are: a two node graph blown up to fill the canvas is
+		-- not what asking to see it means.
 		local room = canvas.AbsoluteSize - Vector2.new(MARGIN, MARGIN) * 2
 		local span = high - low
 		local stop = 1
@@ -1781,7 +1823,7 @@ local function create(pluginRef: Plugin)
 		zoomStop = stop
 		zoom = ZOOM_STOPS[zoomStop]
 
-		-- A graph too big for even the smallest stop is shown from its top-left
+		-- A span too big for even the smallest stop is shown from its top-left
 		-- corner rather than its middle, since that is where reading one starts.
 		local scaled = span * zoom
 		local corner = if scaled.X <= room.X and scaled.Y <= room.Y
@@ -1793,6 +1835,26 @@ local function create(pluginRef: Plugin)
 			math.round(corner.Y - low.Y * zoom)
 		)
 		applyView()
+		return true
+	end
+
+	-- Puts the whole graph on screen. This is the way back from a pan or a zoom
+	-- that has left the graph off the edge, so it has to answer for both rather
+	-- than only sliding; an empty graph, having nothing to measure, slides home.
+	local function frameAll()
+		if not frameNodes(nil) then
+			pan = Vector2.zero
+			applyView()
+		end
+	end
+
+	-- What the F hotkey frames: the picked nodes when any are picked, the whole
+	-- graph otherwise. Falls back to the whole graph if the selection holds
+	-- nothing that is currently on the canvas.
+	local function frameSelection()
+		if next(selection) == nil or not frameNodes(selection) then
+			frameAll()
+		end
 	end
 
 	-- Where a node goes when nothing pointed at a place for it: the middle of
@@ -1969,6 +2031,26 @@ local function create(pluginRef: Plugin)
 
 		table.clear(selection)
 		rebuild()
+	end
+
+	-- Reads a keystroke off what it did to the catcher's seed, since a focused
+	-- TextBox spends these keys on editing its text instead of raising them as
+	-- input: a letter f (from the F shortcut) is inserted, a delete key removes
+	-- one of the seed characters. Anything else is ignored, and the seed is put
+	-- back for the next key either way.
+	local function readKeyCatcher()
+		if keyCatcher == nil or reseedingKeyCatcher then
+			return
+		end
+
+		local text = keyCatcher.Text
+		if string.find(string.lower(text), "f", 1, true) ~= nil then
+			frameSelection()
+		elseif #text < #KEY_CATCHER_SEED then
+			deleteSelected()
+		end
+
+		reseedKeyCatcher()
 	end
 
 	-- Makes a graph and shows it, the same gesture the Spreadsheet view's New
@@ -2329,6 +2411,7 @@ local function create(pluginRef: Plugin)
 
 		background.InputBegan:Connect(function(input)
 			if input.UserInputType == Enum.UserInputType.MouseButton1 then
+				grabKeyboard()
 				beginMarquee(input)
 			end
 		end)
@@ -2490,6 +2573,42 @@ local function create(pluginRef: Plugin)
 
 		inspector.setList(scroll)
 
+		-- The keyboard-focus holder behind the view's shortcuts (see the upvalue).
+		-- Parked off the top-left corner so its caret never shows, and invisible
+		-- besides. Focus is set in code, so where it sits does not matter to it.
+		local catcher = Instance.new("TextBox")
+		keyCatcher = catcher
+		catcher.Position = UDim2.fromOffset(-100, -100)
+		catcher.Size = UDim2.fromOffset(1, 1)
+		catcher.BackgroundTransparency = 1
+		catcher.TextTransparency = 1
+		catcher.ClearTextOnFocus = false
+		catcher.MultiLine = false
+		catcher.TextEditable = true
+		catcher.ZIndex = 0
+		catcher.Parent = rootFrame
+		reseedKeyCatcher()
+
+		-- Each key the author presses while the view holds focus edits this text.
+		-- The handler reads which key it was from how the text changed, then puts
+		-- the seed back; this is what stands in for the InputBegan a focused
+		-- TextBox does not raise for these keys.
+		catcher:GetPropertyChangedSignal("Text"):Connect(readKeyCatcher)
+
+		-- Focus lost to a parameter field or another window may leave the seed
+		-- half eaten; restoring it keeps the catcher ready for focus returning.
+		catcher.FocusLost:Connect(reseedKeyCatcher)
+
+		-- Turning to the canvas hands the view the keyboard. On the press so a
+		-- click to pick or drag arms the shortcuts too, and on entering it so a
+		-- hover is enough -- but never stealing focus out of a field being typed
+		-- in, which is what having a focused text box already means.
+		background.MouseEnter:Connect(function()
+			if UserInputService:GetFocusedTextBox() == nil then
+				grabKeyboard()
+			end
+		end)
+
 		-- Tracked on the root rather than the canvas so a drag that wanders off
 		-- the canvas keeps working until the mouse comes back or is released.
 		rootFrame.InputChanged:Connect(onPointerInput)
@@ -2522,6 +2641,11 @@ local function create(pluginRef: Plugin)
 			stopDividerDrag()
 		end
 	end)
+
+	-- Clicking into the view's window hands it the keyboard, so the shortcuts
+	-- are live the moment it is the window in front, not only after a click that
+	-- happens to land on the canvas.
+	widget.WindowFocused:Connect(grabKeyboard)
 
 	widget.WindowFocusReleased:Connect(endDrag)
 
