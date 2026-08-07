@@ -30,6 +30,10 @@ GraphUi.TOOLTIP_WIDTH = 280
 -- Long enough that sweeping the pointer across a panel does not flash a tooltip
 -- at everything on the way past.
 GraphUi.TOOLTIP_DELAY = 0.4
+-- What a missing critical parameter is flagged with -- a node's border and
+-- badge in the Graph view, an edit box's outline in either window's parameter
+-- panel. Fixed rather than a theme colour, since an error is an error in either.
+GraphUi.ERROR_COLOR = Color3.fromRGB(224, 71, 71)
 
 local PADDING = GraphUi.PADDING
 local ROW_HEIGHT = GraphUi.ROW_HEIGHT

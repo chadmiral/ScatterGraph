@@ -24,9 +24,15 @@ local AttributeSchema = {}
 
 export type Descriptor = {
 	name: string,
+	-- What the panel row is titled, when the attribute's own name reads poorly
+	-- there. The name is still what the value is read and written as.
+	label: string?,
 	-- number | string | choice | boolean | vector2 | numberSequence |
 	-- colorSequence | instance | readOnly
 	kind: string,
+	-- Set to "packages" to edit this value through the palette browser rather
+	-- than a caret.
+	browser: string?,
 	-- Where the value lives. Attributes are the usual case; a wire is a child
 	-- ObjectValue of the same name, which is how a node points at an instance.
 	source: ("attribute" | "wire")?,
@@ -122,30 +128,21 @@ local SCHEMA: { [string]: { Descriptor } } = {
 	},
 
 	PlaceGeometryOnPoints = {
-		-- The two ways to say what gets placed, listed in the order the node
-		-- resolves them: an in-scene template to clone wins over a published
-		-- asset to load.
-		{
-			name = "Asset",
-			kind = "instance",
-			source = "wire",
-			wireNodeType = "Asset",
-			optional = true,
-			description = "The instance in the scene to clone at each point. Set from the Studio "
-				.. "selection. Takes precedence over GeometryAssetID.",
-		},
+		-- The asset placed at each point. The runtime still accepts an in-scene
+		-- template through a child ObjectValue named Asset, but that path is not
+		-- surfaced here: the panel offers only the published asset, titled Asset,
+		-- and the value itself is the GeometryAssetID attribute.
 		{
 			name = "GeometryAssetID",
+			label = "Asset",
 			kind = "number",
 			integer = true,
 			optional = true,
-			supersededBy = "Asset",
 			-- An id is not something anyone types from memory, so this field opens
-			-- the Packages browser instead of a caret.
+			-- the palette browser instead of a caret.
 			browser = "packages",
-			description = "Published asset to load and clone instead of an in-scene template; the first "
-				.. "child of the loaded asset is used. Click to pick from the packages this place uses, or "
-				.. "type an id into that window's search box. Ignored while Asset is set.",
+			description = "The asset placed at each point. Click to pick from the palette in "
+				.. "ReplicatedStorage.ScatterGraphPalette, or type an id into that window's search box.",
 		},
 		{
 			name = "ScaleRange",
@@ -262,36 +259,47 @@ end
 -- points at something. This is what the Graph view flags with a red border and
 -- a warning badge, rather than letting the node warn and carry on into an error
 -- or an empty result at evaluation time.
+-- PlaceGeometryOnPoints places whatever its Asset row points at. The panel
+-- sets that as the GeometryAssetID attribute, but the runtime still honours a
+-- child ObjectValue named Asset set by hand in the Explorer, so a node with
+-- either is complete and only a node with neither is flagged.
+local function geometryUnset(node: Instance): boolean
+	local assetWire = node:FindFirstChild("Asset")
+	local hasAsset = assetWire ~= nil and assetWire:IsA("ObjectValue") and assetWire.Value ~= nil
+	local hasAssetId = node:GetAttribute("GeometryAssetID") ~= nil
+	return not hasAsset and not hasAssetId
+end
+
+-- Does this one row leave the node unable to evaluate? Either a required
+-- parameter that is unset, or -- for PlaceGeometryOnPoints -- the Asset row
+-- while nothing at all is set. The parameter panel outlines the box this
+-- returns true for; issues below reports it in words.
+function AttributeSchema.isMissing(node: Instance, descriptor): boolean
+	local nodeType = node:GetAttribute("NodeType")
+
+	if nodeType == "PlaceGeometryOnPoints" and descriptor.name == "GeometryAssetID" then
+		return geometryUnset(node)
+	end
+
+	if descriptor.optional then
+		return false
+	end
+
+	if descriptor.source == "wire" then
+		local wire = node:FindFirstChild(descriptor.name)
+		return not (wire ~= nil and wire:IsA("ObjectValue") and wire.Value ~= nil)
+	end
+
+	return node:GetAttribute(descriptor.name) == nil
+end
+
 function AttributeSchema.issues(node: Instance): { string }
 	local issues = {}
 	local nodeType = node:GetAttribute("NodeType")
 
 	for _, descriptor in SCHEMA[nodeType] or {} do
-		if not descriptor.optional then
-			local present
-			if descriptor.source == "wire" then
-				local wire = node:FindFirstChild(descriptor.name)
-				present = wire ~= nil and wire:IsA("ObjectValue") and wire.Value ~= nil
-			else
-				present = node:GetAttribute(descriptor.name) ~= nil
-			end
-
-			if not present then
-				table.insert(issues, descriptor.name .. " is not set.")
-			end
-		end
-	end
-
-	-- PlaceGeometryOnPoints has something to clone given either way -- an
-	-- in-scene Asset wire or a published GeometryAssetID -- so each is optional
-	-- on its own, but a node with neither places nothing.
-	if nodeType == "PlaceGeometryOnPoints" then
-		local assetWire = node:FindFirstChild("Asset")
-		local hasAsset = assetWire ~= nil and assetWire:IsA("ObjectValue") and assetWire.Value ~= nil
-		local hasAssetId = node:GetAttribute("GeometryAssetID") ~= nil
-
-		if not hasAsset and not hasAssetId then
-			table.insert(issues, "No geometry to place: set an Asset or a GeometryAssetID.")
+		if AttributeSchema.isMissing(node, descriptor) then
+			table.insert(issues, (descriptor.label or descriptor.name) .. " is not set.")
 		end
 	end
 

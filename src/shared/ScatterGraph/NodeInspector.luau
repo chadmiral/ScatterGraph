@@ -31,6 +31,7 @@ local PADDING = GraphUi.PADDING
 local ROW_HEIGHT = GraphUi.ROW_HEIGHT
 local SECTION_HEIGHT = GraphUi.SECTION_HEIGHT
 local NAME_COLUMN = GraphUi.NAME_COLUMN
+local ERROR_COLOR = GraphUi.ERROR_COLOR
 
 local color = GraphUi.color
 local indent = GraphUi.indent
@@ -245,10 +246,29 @@ function NodeInspector.new(pluginRef: Plugin, overlay)
 			end)
 		end
 
-		button.Activated:Connect(function()
-			PackagesBrowser.open(pluginRef, node.Name .. "." .. descriptor.name, value, function(id)
-				commitValue(node, descriptor, id)
+		-- Picking an asset here is the choice of what to place. A child
+		-- ObjectValue named Asset, set by hand in the Explorer, outranks this id
+		-- at evaluation time, so a leftover one would quietly ignore the pick --
+		-- it is removed in the same action, so one undo puts both back.
+		local function commitPicked(id: number?)
+			if node.Parent == nil then
+				return
+			end
+
+			recorded("Set " .. (descriptor.label or descriptor.name), function()
+				node:SetAttribute(descriptor.name, id)
+
+				if id ~= nil then
+					local wire = findWire(node, "Asset")
+					if wire ~= nil then
+						wire:Destroy()
+					end
+				end
 			end)
+		end
+
+		button.Activated:Connect(function()
+			PackagesBrowser.open(pluginRef, node.Name .. "." .. (descriptor.label or descriptor.name), value, commitPicked)
 		end)
 
 		return container
@@ -428,10 +448,14 @@ function NodeInspector.new(pluginRef: Plugin, overlay)
 		row.Size = UDim2.new(1, 0, 0, ROW_HEIGHT)
 		row.LayoutOrder = order
 
+		-- The row is titled by the descriptor's label where it has one, so a
+		-- value whose attribute name reads poorly can still show a plain word.
+		local title = descriptor.label or descriptor.name
+
 		-- Both ways of naming the geometry are always shown, so the one that is
 		-- currently losing says as much rather than looking like it applies.
 		local superseded = isSuperseded(node, descriptor)
-		local name = if superseded then descriptor.name .. " (unused)" else descriptor.name
+		local name = if superseded then title .. " (unused)" else title
 
 		local nameLabel = makeLabel(name, color(Enum.StudioStyleGuideColor.DimmedText), false)
 		nameLabel.Size = UDim2.new(NAME_COLUMN, -PADDING, 1, 0)
@@ -457,6 +481,18 @@ function NodeInspector.new(pluginRef: Plugin, overlay)
 				button.Text = "(" .. descriptor.supersededBy .. " is set)"
 			end
 		end
+
+		-- The same fault the Graph view badges a node for: the box the value
+		-- would go in is outlined red so the panel points at what to fill.
+		if AttributeSchema.isMissing(node, descriptor) then
+			for _, control in editor:GetDescendants() do
+				if control:IsA("TextBox") or control:IsA("TextButton") then
+					control.BorderColor3 = ERROR_COLOR
+					control.BorderSizePixel = 2
+				end
+			end
+		end
+
 		editor.Parent = row
 
 		row.Parent = list

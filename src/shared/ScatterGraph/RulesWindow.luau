@@ -28,7 +28,6 @@
 	like any other Studio change.
 ]]
 
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Selection = game:GetService("Selection")
 
 local GraphUi = require(script.Parent:WaitForChild("GraphUi"))
@@ -52,10 +51,6 @@ local color = GraphUi.color
 local indent = GraphUi.indent
 local makeLabel = GraphUi.makeLabel
 local recorded = GraphUi.recorded
-
--- Where a graph goes when this window makes one, and the location the rest of
--- the system expects to find graphs in.
-local GRAPH_FOLDER = "ScatterGraphs"
 
 local function collectOutputs(graph: Instance): { ObjectValue }
 	local outputs = {}
@@ -94,42 +89,6 @@ local function collectUpstreamNodes(node: Instance?, visited: { [Instance]: bool
 	end
 
 	table.insert(ordered, node)
-end
-
--- Makes the graph folder if the place has never held a graph before, which is
--- what the evaluator does with it too.
-local function findGraphFolder(): Instance
-	local folder = ReplicatedStorage:FindFirstChild(GRAPH_FOLDER)
-	if folder ~= nil then
-		return folder
-	end
-
-	folder = Instance.new("Folder")
-	folder.Name = GRAPH_FOLDER
-	folder.Parent = ReplicatedStorage
-	return folder
-end
-
-local function makeGraph(): Instance
-	local container = findGraphFolder()
-
-	local name = "ScatterGraph"
-	local suffix = 1
-	while container:FindFirstChild(name) ~= nil do
-		suffix += 1
-		name = "ScatterGraph" .. suffix
-	end
-
-	local graph = Instance.new("Model")
-	graph.Name = name
-	graph:SetAttribute("NodeType", "ScatterGraph")
-	-- Made now rather than with the first rule so the graph is a complete,
-	-- evaluable one from the moment it exists -- an empty registry places
-	-- nothing, but a missing one is a graph the evaluator cannot read.
-	RuleTemplates.findOutputRegistry(graph)
-	graph.Parent = container
-
-	return graph
 end
 
 -- Deletes the registry entry and the nodes behind it, but only the nodes this
@@ -369,7 +328,7 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 	local function createGraph()
 		local graph
 		local made = recorded("New ScatterGraph", function()
-			graph = makeGraph()
+			graph = Graphs.create()
 		end)
 
 		if not made then

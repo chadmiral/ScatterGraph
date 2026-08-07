@@ -1,34 +1,33 @@
 --[[
 	PackagesBrowser
 
-	A picker for a published asset id, opened from the GeometryAssetID field: the
-	packages this place uses, listed by name, with a search box over them.
+	A picker for a published asset id, opened from the Asset field: the packages
+	kept in the palette folder, listed by name, with a search box over them.
 
-	Nobody knows a package's asset id by heart, and a plugin cannot ask Roblox
-	which packages an author or their group own. HttpService refuses every Roblox
-	domain outright, and no engine API lists a creator's inventory. What is
-	readable from in here is the place itself: every package instance carries a
-	PackageLink naming the package it came from, and GetProductInfo turns that id
-	into a published name and an owner without going near HttpService. So the
-	list is the packages the place already contains, narrowed to the ones the
-	signed-in author or the experience's group own -- which, for a place being
-	decorated, is very nearly the library an author wants anyway. Packages that
-	came from somewhere else are counted rather than listed, so it is clear the
-	list is not everything found.
+	The palette is a folder at ReplicatedStorage.ScatterGraphPalette where an
+	author gathers the assets a graph draws from. Every package there carries a
+	PackageLink naming the package it came from, so the browser walks that folder,
+	takes the id off each PackageLink, and lists them all -- the palette is the
+	curated set on purpose, so nothing is filtered out.
 
-	A name is a web lookup apiece, so they are read one at a time in the
-	background with rows appearing as they land, and kept for the rest of the
-	session: a second visit to the browser is immediate. The search box takes an
-	id as well as a name, which is what keeps a known id typeable now that the
-	field itself opens this window instead of a caret.
+	A name is a web lookup apiece: GetProductInfo turns an id into its published
+	name without going near HttpService, which refuses every Roblox domain. Names
+	are read one at a time in the background with rows appearing as they land --
+	each row shows the palette instance's own name until then -- and kept for the
+	rest of the session, so a second visit to the browser is immediate. The
+	search box takes an id as well as a name, which keeps a known id typeable now
+	that the field itself opens this window instead of a caret.
 ]]
 
 local MarketplaceService = game:GetService("MarketplaceService")
-local StudioService = game:GetService("StudioService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local GraphUi = require(script.Parent:WaitForChild("GraphUi"))
 
 local PackagesBrowser = {}
+
+-- The folder the palette lives in, under ReplicatedStorage.
+local PALETTE_NAME = "ScatterGraphPalette"
 
 local PADDING = GraphUi.PADDING
 local ROW_HEIGHT = GraphUi.ROW_HEIGHT
@@ -53,7 +52,6 @@ local ID_DIGITS = 8
 -- What GetProductInfo said about an id, by id, kept for the session: the answer
 -- cannot change while Studio is open, and it costs a web call to ask.
 local details = {}
-local userId = nil
 
 local widget = nil
 local ui = nil
@@ -64,26 +62,21 @@ local scanToken = 0
 
 local render
 
-local function signedInUser(): number?
-	if userId == nil then
-		local ok, result = pcall(function()
-			return StudioService:GetUserId()
-		end)
-		userId = if ok then result else nil
-	end
-
-	return userId
-end
-
--- Every package the place holds, by id, with the name of an instance it is
--- attached to and how many copies there are. The instance name is a stand-in
+-- Every package in the palette folder, by id, with the name of an instance it
+-- is attached to and how many copies there are. The instance name is a stand-in
 -- until the published name arrives, and worth showing on its own: it is what an
--- author sees in the Explorer.
-local function scanPlace()
+-- author sees in the Explorer. An empty result means the folder is missing or
+-- holds nothing that is a package.
+local function scanPalette()
 	local byId = {}
 	local found = {}
 
-	for _, thing in game:GetDescendants() do
+	local palette = ReplicatedStorage:FindFirstChild(PALETTE_NAME)
+	if palette == nil then
+		return found
+	end
+
+	for _, thing in palette:GetDescendants() do
 		if thing:IsA("PackageLink") then
 			local id = tonumber(string.match(tostring(thing.PackageId), "%d+"))
 
@@ -118,37 +111,13 @@ local function readDetail(id: number)
 
 	local detail
 	if ok and type(info) == "table" then
-		local creator = info.Creator or {}
-		detail = {
-			name = info.Name,
-			ownerType = creator.CreatorType,
-			ownerId = creator.CreatorTargetId,
-			ownerName = creator.Name,
-		}
+		detail = { name = info.Name }
 	else
 		detail = { failed = true }
 	end
 
 	details[id] = detail
 	return detail
-end
-
--- Whose packages are worth listing: the author's own, and the ones belonging to
--- the group the experience is under. A place can hold packages from anywhere --
--- a model taken from the marketplace brings its own along -- and those are not
--- what an author is reaching for here.
-local function ownedByUs(detail): boolean
-	if detail.failed or detail.ownerId == nil then
-		return false
-	end
-
-	if detail.ownerType == "User" then
-		return detail.ownerId == signedInUser()
-	elseif detail.ownerType == "Group" then
-		return game.CreatorType == Enum.CreatorType.Group and detail.ownerId == game.CreatorId
-	end
-
-	return false
 end
 
 -- The name to show for an id, if it has already been read. Nothing is looked up
@@ -235,28 +204,28 @@ render = function()
 
 	local query = string.lower(string.match(state.query, "^%s*(.-)%s*$") or "")
 
-	-- Gathered before anything is drawn, because whether digits in the box are a
-	-- search or an id worth offering depends on what the search turned up.
+	-- Every package in the palette is shown; the list is the curated set on
+	-- purpose. A row reads by its published name once that lands and by the
+	-- palette instance's own name until then, and a name still loading is
+	-- counted for the status line.
 	local shown = {}
-	local pending, elsewhere = 0, 0
+	local pending = 0
 
 	for _, entry in state.entries do
 		local detail = details[entry.id]
 
 		if detail == nil then
 			pending += 1
-		elseif not ownedByUs(detail) then
-			elsewhere += 1
-		else
-			local name = detail.name or entry.sample
-			local matches = query == ""
-				or string.find(string.lower(name), query, 1, true) ~= nil
-				or string.find(string.lower(entry.sample), query, 1, true) ~= nil
-				or string.find(tostring(entry.id), query, 1, true) ~= nil
+		end
 
-			if matches then
-				table.insert(shown, { entry = entry, name = name, detail = detail })
-			end
+		local name = (if detail ~= nil and not detail.failed then detail.name else nil) or entry.sample
+		local matches = query == ""
+			or string.find(string.lower(name), query, 1, true) ~= nil
+			or string.find(string.lower(entry.sample), query, 1, true) ~= nil
+			or string.find(tostring(entry.id), query, 1, true) ~= nil
+
+		if matches then
+			table.insert(shown, { entry = entry, name = name })
 		end
 	end
 
@@ -279,13 +248,13 @@ render = function()
 		end)
 	end
 
-	-- An id typed in full, for a package this place has never held. Offered only
+	-- An id typed in full, for an asset the palette does not hold. Offered only
 	-- when the digits are long enough to be an id or found nothing to filter,
 	-- since a few digits typed to narrow the list by id are not an id themselves.
 	local typed = if string.match(query, "^%d+$") ~= nil then tonumber(query) else nil
 	if typed ~= nil and details[typed] == nil and (#query >= ID_DIGITS or #shown == 0) then
 		order += 1
-		addRow(string.format("Use %d", typed), "not in this place", order, false, function()
+		addRow(string.format("Use %d", typed), "not in the palette", order, false, function()
 			choose(typed)
 		end)
 	end
@@ -309,21 +278,17 @@ render = function()
 		)
 	end
 
-	-- Where the list came from and what it left out, since a list of packages
-	-- that is not an author's whole inventory should say so rather than look
-	-- like one.
+	-- Where the list came from: the palette folder, named so an empty list reads
+	-- as an empty folder rather than a browser that failed to find anything.
 	local status
 	if #state.entries == 0 then
-		status = "No packages in this place yet. Insert one, or type its id above."
+		status = "No packages in ReplicatedStorage." .. PALETTE_NAME .. ". Add some there, or type an id above."
 	elseif pending > 0 then
 		status = string.format("%d shown, reading %d more name%s...", #shown, pending, if pending == 1 then "" else "s")
 	elseif #shown == 0 and query ~= "" then
-		status = "Nothing here matches. Type an id to use one from outside this place."
+		status = "Nothing in the palette matches. Type an id to use one anyway."
 	else
-		status = string.format("%d package%s in this place", #shown, if #shown == 1 then "" else "s")
-		if elsewhere > 0 then
-			status ..= string.format(", %d owned by someone else and not shown", elsewhere)
-		end
+		status = string.format("%d package%s in the palette", #shown, if #shown == 1 then "" else "s")
 	end
 
 	ui.status.Text = status
@@ -436,6 +401,15 @@ end
 -- `title` names what is being set, `current` is the id it is set to now, and
 -- `commit` is handed the chosen id, or nil for a field cleared.
 function PackagesBrowser.open(pluginRef: Plugin, title: string, current: number?, commit: (number?) -> ())
+	-- A plugin that reloaded on top of an open window, or a failed reload,
+	-- can leave the cached widget destroyed while its reference lingers here.
+	-- Re-enabling a dead window shows nothing, so a widget whose host is gone
+	-- is treated as absent and built again rather than reused.
+	if widget ~= nil and widget.Parent == nil then
+		widget = nil
+		ui = nil
+	end
+
 	if widget == nil then
 		local info = DockWidgetPluginGuiInfo.new(Enum.InitialDockState.Float, false, true, 420, 460, 280, 200)
 		widget = pluginRef:CreateDockWidgetPluginGui("ScatterGraphPackagesBrowser", info)
@@ -464,9 +438,9 @@ function PackagesBrowser.open(pluginRef: Plugin, title: string, current: number?
 		query = "",
 		current = current,
 		commit = commit,
-		-- Scanned per open rather than kept: a package inserted since the last
-		-- visit should be in the list, and the walk is the cheap half of this.
-		entries = scanPlace(),
+		-- Scanned per open rather than kept: a package added to the palette since
+		-- the last visit should be in the list, and the walk is the cheap half.
+		entries = scanPalette(),
 	}
 
 	build()

@@ -15,7 +15,13 @@ local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Selection = game:GetService("Selection")
 
+local RuleTemplates = require(script.Parent:WaitForChild("RuleTemplates"))
+
 local Graphs = {}
+
+-- Where a graph goes when a window makes one, and the folder the rest of the
+-- system expects to find graphs in.
+local GRAPH_FOLDER = "ScatterGraphs"
 
 -- Where a graph can be kept: the storage services by convention, and Workspace
 -- because a graph is often left next to the volumes that use it.
@@ -117,6 +123,45 @@ function Graphs.selected(): Instance?
 	end
 
 	return nil
+end
+
+-- The folder graphs are made in, created the first time the place needs it.
+local function graphFolder(): Instance
+	local folder = ReplicatedStorage:FindFirstChild(GRAPH_FOLDER)
+	if folder ~= nil then
+		return folder
+	end
+
+	folder = Instance.new("Folder")
+	folder.Name = GRAPH_FOLDER
+	folder.Parent = ReplicatedStorage
+	return folder
+end
+
+-- Makes an empty, evaluable graph in ReplicatedStorage.ScatterGraphs and hands
+-- it back with a name no other graph there is using. Not wrapped in a recording
+-- or a selection: the window that calls this owns the undo waypoint and decides
+-- what to select and show, and both windows do so the same way.
+function Graphs.create(): Instance
+	local container = graphFolder()
+
+	local name = "ScatterGraph"
+	local suffix = 1
+	while container:FindFirstChild(name) ~= nil do
+		suffix += 1
+		name = "ScatterGraph" .. suffix
+	end
+
+	local graph = Instance.new("Model")
+	graph.Name = name
+	graph:SetAttribute("NodeType", "ScatterGraph")
+	-- Made now rather than with the first rule so the graph is complete from the
+	-- moment it exists: an empty registry places nothing, but a missing one is a
+	-- graph the evaluator cannot read.
+	RuleTemplates.findOutputRegistry(graph)
+	graph.Parent = container
+
+	return graph
 end
 
 return Graphs

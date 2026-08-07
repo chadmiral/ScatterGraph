@@ -50,6 +50,7 @@
 
 local AssetService = game:GetService("AssetService")
 local UserInputService = game:GetService("UserInputService")
+local Selection = game:GetService("Selection")
 
 local GraphUi = require(script.Parent:WaitForChild("GraphUi"))
 local Graphs = require(script.Parent:WaitForChild("Graphs"))
@@ -117,9 +118,9 @@ local TITLE_SELECTED_LIFT = 0.3
 local NODE_BORDER = Color3.fromRGB(158, 158, 158)
 -- A node missing something it needs to evaluate -- a required attribute, or a
 -- PlaceGeometryOnPoints with neither an Asset nor a GeometryAssetID -- is drawn
--- with this border and a badge of it in the corner. Fixed rather than a theme
--- colour: an error reads as an error in either theme.
-local ERROR_COLOR = Color3.fromRGB(224, 71, 71)
+-- with this border and a badge of it in the corner. Shared with the parameter
+-- panel, which outlines the offending edit box in the same red.
+local ERROR_COLOR = GraphUi.ERROR_COLOR
 -- The warning badge over the top-right corner of an incomplete node.
 local BADGE_SIZE = 16
 -- Faint enough to read the nodes through the box being dragged over them.
@@ -403,6 +404,9 @@ local function create(pluginRef: Plugin)
 
 	local root = nil
 	local canvas = nil
+	-- The right-hand control on the node ribbon: it names the graph on screen and
+	-- drops down the list of every graph in the place to switch between them.
+	local graphChooser = nil
 	local gridLayer = nil
 	-- Which tile the grid is currently drawn from, so the zoom crossing a stop is
 	-- the only thing that swaps it.
@@ -850,6 +854,16 @@ local function create(pluginRef: Plugin)
 
 	local function updateRibbon()
 		local hasGraph = graph ~= nil and graph:IsDescendantOf(game)
+
+		-- The chooser always names what is on screen, so it stays right whether
+		-- the graph changed under it or the view was pointed at a new one.
+		if graphChooser ~= nil then
+			local name = "(no graph)"
+			if graph ~= nil and graph:IsDescendantOf(game) then
+				name = graph.Name
+			end
+			graphChooser.Text = name .. "   \u{25BE}"
+		end
 		-- The Output registry is the graph's outlet rather than a node the
 		-- author added, and a graph without one evaluates to nothing, so it is
 		-- not offered for deletion. A selection that includes it still offers
@@ -864,7 +878,10 @@ local function create(pluginRef: Plugin)
 		end
 
 		for _, entry in ribbonButtons do
-			local enabled = if entry.requires == "node" then hasNode else hasGraph
+			local enabled = if entry.requires == "node"
+				then hasNode
+				elseif entry.requires == "none" then true
+				else hasGraph
 			local modifier = if enabled then nil else Enum.StudioStyleGuideModifier.Disabled
 
 			entry.button.Active = enabled
@@ -1934,6 +1951,77 @@ local function create(pluginRef: Plugin)
 		rebuild()
 	end
 
+	-- Makes a graph and shows it, the same gesture the Spreadsheet view's New
+	-- Graph button makes -- both go through Graphs.create, so a graph made in
+	-- either window is identical, and both select it in the Explorer where it
+	-- gets its real name.
+	local function createGraph()
+		local made
+		local ok = recorded("New ScatterGraph", function()
+			made = Graphs.create()
+		end)
+
+		if not ok or made == nil then
+			return
+		end
+
+		Selection:Set({ made })
+		self.show(made)
+	end
+
+	-- Deletes the graph on screen and drops to whatever graph is left, or to the
+	-- empty view when none is. Unparented rather than destroyed so ctrl-Z brings
+	-- it back, exactly as the Spreadsheet view's Delete Graph does.
+	local function deleteGraph()
+		if graph == nil or not graph:IsDescendantOf(game) then
+			return
+		end
+
+		local removed = graph
+		recorded("Delete ScatterGraph", function()
+			removed.Parent = nil
+		end)
+
+		local remaining = Graphs.inPlace()[1]
+		if remaining ~= nil then
+			self.show(remaining)
+		else
+			graph = nil
+			table.clear(selection)
+			rebuild()
+		end
+	end
+
+	-- Drops down every graph in the place, the same list the Spreadsheet view's
+	-- first column shows, with the one on screen ticked. Picking another shows it.
+	local function openGraphChooser()
+		if graphChooser == nil then
+			return
+		end
+
+		local items = {}
+		local graphs = Graphs.inPlace()
+
+		if #graphs == 0 then
+			table.insert(items, { text = "No ScatterGraphs in this place." })
+		else
+			for _, candidate in graphs do
+				local isCurrent = candidate == graph
+				table.insert(items, {
+					text = candidate.Name,
+					icon = if isCurrent then "\u{2714}" else nil,
+					activate = function()
+						if candidate ~= graph then
+							self.show(candidate)
+						end
+					end,
+				})
+			end
+		end
+
+		overlay.openDropdown(graphChooser, items)
+	end
+
 	local function addRibbonButton(spec)
 		local button = Instance.new("TextButton")
 		button.Size = UDim2.new(0, 0, 0, BUTTON_HEIGHT)
@@ -1972,24 +2060,72 @@ local function create(pluginRef: Plugin)
 
 		overlay.attach(rootFrame)
 
-		local ribbon = Instance.new("Frame")
-		ribbon.Size = UDim2.new(1, 0, 0, RIBBON_HEIGHT)
-		ribbon.BackgroundColor3 = color(Enum.StudioStyleGuideColor.Titlebar)
-		ribbon.BorderSizePixel = 0
-		ribbon.Parent = rootFrame
+		-- Two ribbon rows, mirroring the Spreadsheet view: the top makes and
+		-- unmakes whole graphs and chooses which one is shown, the one below adds
+		-- and deletes the nodes inside it.
+		local function makeRibbonRow(y: number): (Frame, Frame)
+			local ribbon = Instance.new("Frame")
+			ribbon.Position = UDim2.fromOffset(0, y)
+			ribbon.Size = UDim2.new(1, 0, 0, RIBBON_HEIGHT)
+			ribbon.BackgroundColor3 = color(Enum.StudioStyleGuideColor.Titlebar)
+			ribbon.BorderSizePixel = 0
+			ribbon.Parent = rootFrame
 
-		local ribbonLayout = Instance.new("UIListLayout")
-		ribbonLayout.FillDirection = Enum.FillDirection.Horizontal
-		ribbonLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-		ribbonLayout.SortOrder = Enum.SortOrder.LayoutOrder
-		ribbonLayout.Padding = UDim.new(0, 4)
-		ribbonLayout.Parent = ribbon
+			-- The buttons flow from the left out of this holder rather than off the
+			-- row itself, so a control positioned on the row -- the graph chooser --
+			-- can sit at the right without the layout dragging it into the flow. The
+			-- holder is transparent and not Active, so it never swallows a click.
+			local buttons = Instance.new("Frame")
+			buttons.Size = UDim2.fromScale(1, 1)
+			buttons.BackgroundTransparency = 1
+			buttons.Parent = ribbon
 
-		local ribbonPadding = Instance.new("UIPadding")
-		ribbonPadding.PaddingLeft = UDim.new(0, PADDING)
-		ribbonPadding.Parent = ribbon
+			local layout = Instance.new("UIListLayout")
+			layout.FillDirection = Enum.FillDirection.Horizontal
+			layout.VerticalAlignment = Enum.VerticalAlignment.Center
+			layout.SortOrder = Enum.SortOrder.LayoutOrder
+			layout.Padding = UDim.new(0, 4)
+			layout.Parent = buttons
+
+			local padding = Instance.new("UIPadding")
+			padding.PaddingLeft = UDim.new(0, PADDING)
+			padding.Parent = buttons
+
+			return ribbon, buttons
+		end
+
+		local function makeEdge(y: number)
+			local edge = Instance.new("Frame")
+			edge.Position = UDim2.fromOffset(0, y)
+			edge.Size = UDim2.new(1, 0, 0, 1)
+			edge.BackgroundColor3 = color(Enum.StudioStyleGuideColor.Border)
+			edge.BorderSizePixel = 0
+			edge.Parent = rootFrame
+		end
 
 		table.clear(ribbonButtons)
+
+		local _, graphButtons = makeRibbonRow(0)
+		makeEdge(RIBBON_HEIGHT)
+		local nodeRibbon, nodeButtons = makeRibbonRow(RIBBON_HEIGHT + 1)
+
+		addRibbonButton({
+			icon = "\u{1F517}",
+			label = "New Graph",
+			tooltip = "Adds an empty graph to ReplicatedStorage.ScatterGraphs and shows it here. Rename it in "
+				.. "the Explorer: a scatter volume names the graph it uses.",
+			requires = "none",
+			activate = createGraph,
+		}).Parent = graphButtons
+
+		addRibbonButton({
+			icon = "\u{274C}",
+			label = "Delete Graph",
+			tooltip = "Deletes the graph on screen and every rule in it. Volumes pointing at it place nothing "
+				.. "until they are pointed somewhere else. Undo brings it back.",
+			requires = "graph",
+			activate = deleteGraph,
+		}).Parent = graphButtons
 
 		local addButton
 		addButton = addRibbonButton({
@@ -2004,7 +2140,7 @@ local function create(pluginRef: Plugin)
 				overlay.openDropdown(addButton, addMenuItems(viewMiddle()))
 			end,
 		})
-		addButton.Parent = ribbon
+		addButton.Parent = nodeButtons
 
 		addRibbonButton({
 			icon = "\u{274C}",
@@ -2013,7 +2149,7 @@ local function create(pluginRef: Plugin)
 				.. "them stay where they are, and an Output in the selection is left alone.",
 			requires = "node",
 			activate = deleteSelected,
-		}).Parent = ribbon
+		}).Parent = nodeButtons
 
 		addRibbonButton({
 			icon = "\u{1F50D}",
@@ -2022,16 +2158,40 @@ local function create(pluginRef: Plugin)
 				.. "has left the graph off screen. It never zooms in past actual size.",
 			requires = "graph",
 			activate = frameAll,
-		}).Parent = ribbon
+		}).Parent = nodeButtons
 
-		local edge = Instance.new("Frame")
-		edge.Position = UDim2.fromOffset(0, RIBBON_HEIGHT)
-		edge.Size = UDim2.new(1, 0, 0, 1)
-		edge.BackgroundColor3 = color(Enum.StudioStyleGuideColor.Border)
-		edge.BorderSizePixel = 0
-		edge.Parent = rootFrame
+		-- The graph chooser, right-aligned on the node row so it lines up with the
+		-- window's edge the way the Spreadsheet view's list column does. Sits on
+		-- the row rather than in its button holder, so the layout leaves it be. It
+		-- is added after the holder, so it draws on top and takes the click.
+		graphChooser = Instance.new("TextButton")
+		graphChooser.AnchorPoint = Vector2.new(1, 0.5)
+		graphChooser.Position = UDim2.new(1, -PADDING, 0.5, 0)
+		graphChooser.Size = UDim2.new(0, 200, 0, BUTTON_HEIGHT)
+		graphChooser.BackgroundColor3 = color(Enum.StudioStyleGuideColor.Button)
+		graphChooser.BorderSizePixel = 0
+		graphChooser.Font = Enum.Font.SourceSans
+		graphChooser.TextSize = 14
+		graphChooser.TextColor3 = color(Enum.StudioStyleGuideColor.ButtonText)
+		graphChooser.TextXAlignment = Enum.TextXAlignment.Left
+		graphChooser.TextTruncate = Enum.TextTruncate.AtEnd
+		graphChooser.Text = ""
 
-		local paneTop = RIBBON_HEIGHT + 1
+		local chooserPadding = Instance.new("UIPadding")
+		chooserPadding.PaddingLeft = UDim.new(0, PADDING)
+		chooserPadding.PaddingRight = UDim.new(0, PADDING)
+		chooserPadding.Parent = graphChooser
+
+		graphChooser.Parent = nodeRibbon
+		graphChooser.Activated:Connect(openGraphChooser)
+		overlay.watchForTooltip(
+			graphChooser,
+			"Every ScatterGraph in the place -- the same list the Spreadsheet view's first column shows. Pick "
+				.. "one to show it here."
+		)
+
+		local paneTop = (RIBBON_HEIGHT + 1) * 2
+		makeEdge(paneTop - 1)
 
 		canvas = Instance.new("Frame")
 		canvas.Position = UDim2.fromOffset(0, paneTop)
