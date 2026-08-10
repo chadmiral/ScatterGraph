@@ -78,6 +78,11 @@ function NodeInspector.new(pluginRef: Plugin, overlay)
 	-- draws the same graph elsewhere and needs to keep up.
 	inspector.onChanged = nil
 
+	-- Called with true/false as an editable field gains and loses the keyboard,
+	-- for a host that keeps its own keyboard grab (the Graph view's shortcut
+	-- catcher) and must step aside while a field is being typed into.
+	inspector.onFieldFocus = nil
+
 	local render
 
 	local function commitValue(node: Instance, descriptor, value: any)
@@ -135,6 +140,20 @@ function NodeInspector.new(pluginRef: Plugin, overlay)
 		box.ClearTextOnFocus = false
 		box.Text = ""
 		indent(box)
+
+		-- Lets the host drop any keyboard grab of its own while this field is
+		-- being typed into, and take it back afterwards.
+		box.Focused:Connect(function()
+			if inspector.onFieldFocus ~= nil then
+				inspector.onFieldFocus(true)
+			end
+		end)
+		box.FocusLost:Connect(function()
+			if inspector.onFieldFocus ~= nil then
+				inspector.onFieldFocus(false)
+			end
+		end)
+
 		return box
 	end
 

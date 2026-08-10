@@ -138,6 +138,17 @@ local BADGE_SIZE = 16
 -- Faint enough to read the nodes through the box being dragged over them.
 local MARQUEE_FILL = 0.85
 
+-- A Note is not a node the graph evaluates -- it has no ports and nothing wires
+-- to it, so the runtime never reaches it -- but a place to pin a comment on the
+-- canvas. Drawn as a post-it: a yellow card with a darker gummed strip along the
+-- top to drag it by, and dark ink that reads on the yellow whatever the theme.
+local NOTE_BACKGROUND = Color3.fromRGB(245, 224, 115)
+local NOTE_HEADER = Color3.fromRGB(232, 208, 84)
+local NOTE_TEXT = Color3.fromRGB(64, 54, 18)
+-- A fixed card, tall enough for a few lines; the body scrolls past that rather
+-- than the card growing, so a long note does not shove the layout around.
+local NOTE_HEIGHT = 120
+
 -- The canvas grid. Positions round to the snap, which is what makes a graph tidy
 -- itself; the dots are drawn twice as far apart, since one at every snap is
 -- denser than it needs to be to read the spacing off.
@@ -193,6 +204,14 @@ local NODE_TEMPLATES = {
 		nodeType = "PlaceGeometryOnPoints",
 		attributes = { ScaleRange = Vector2.new(0.9, 1.1), RotationType = "UpAxis" },
 	},
+	{
+		-- Not a working node: a post-it to write on. The runtime never sees it,
+		-- since nothing wires to it. Text is the note itself.
+		label = "Note",
+		name = "Note",
+		nodeType = "Note",
+		attributes = { Text = "" },
+	},
 }
 
 -- Wires carry a NodeType attribute of their own, so being one is not enough.
@@ -202,6 +221,13 @@ end
 
 local function isOutput(node: Instance): boolean
 	return node:GetAttribute("NodeType") == "Output"
+end
+
+-- A comment card rather than a working node: no ports, no wires, nothing to
+-- evaluate. Drawn and dragged like any other card, but its whole body is an
+-- editable note instead of a strip of parameters.
+local function isNote(node: Instance): boolean
+	return node:GetAttribute("NodeType") == "Note"
 end
 
 local function snapToGrid(point: Vector2): Vector2
@@ -362,6 +388,11 @@ local function inputPortsOf(node: Instance)
 
 		table.insert(ports, { name = "(new rule)", isNew = true })
 		return ports
+	end
+
+	-- A note reads nothing and feeds nothing.
+	if isNote(node) then
+		return {}
 	end
 
 	if node:GetAttribute("NodeType") == "ScatterPoints" then
@@ -559,6 +590,15 @@ local function create(pluginRef: Plugin)
 	-- mistaken for a keystroke by the handler that watches its text.
 	local reseedingKeyCatcher = false
 
+	-- Whether an editable field (a parameter box or a note body) currently holds
+	-- the keyboard, and whether the pointer is over the canvas. Together these
+	-- decide when the catcher may take the keyboard: it may only do so while the
+	-- author is on the canvas and not typing into a field. The catcher is a
+	-- focused text box, and a focused text box eats every key, so leaving it up
+	-- while a field is being edited swallows the keystrokes meant for the field.
+	local fieldFocused = false
+	local pointerOverCanvas = false
+
 	-- Restores the seed and drops the caret back into the middle of it, ready for
 	-- the next key to shorten or lengthen it.
 	local function reseedKeyCatcher()
@@ -573,12 +613,34 @@ local function create(pluginRef: Plugin)
 	end
 
 	-- Points keyboard focus at the hidden catcher, which is what makes the view's
-	-- shortcuts fire and keeps their keys from reaching the viewport. Called when
-	-- the author turns to the view -- clicking in it, or the window taking focus.
+	-- shortcuts fire and keeps their keys from reaching the viewport. Refused
+	-- while a field is being typed into, so selecting a node and then editing one
+	-- of its parameters does not hand the keyboard straight back to the catcher.
 	local function grabKeyboard()
-		if keyCatcher ~= nil then
+		if keyCatcher ~= nil and not fieldFocused then
 			keyCatcher:CaptureFocus()
 			reseedKeyCatcher()
+		end
+	end
+
+	-- Hands the keyboard back so a field can take it.
+	local function releaseKeyboard()
+		if keyCatcher ~= nil then
+			keyCatcher:ReleaseFocus()
+		end
+	end
+
+	-- A field reports here as it gains and loses the keyboard. Gaining it drops
+	-- the catcher at once so the field keeps the keys; losing it re-arms the
+	-- shortcuts, but only if the pointer is still on the canvas, so tabbing out of
+	-- a field toward the rest of Studio does not silently grab the keyboard back.
+	local function setFieldFocused(focused: boolean)
+		fieldFocused = focused
+
+		if focused then
+			releaseKeyboard()
+		elseif pointerOverCanvas then
+			grabKeyboard()
 		end
 	end
 
@@ -603,6 +665,10 @@ local function create(pluginRef: Plugin)
 	end
 
 	local function nodeHeight(node: Instance): number
+		if isNote(node) then
+			return NOTE_HEIGHT
+		end
+
 		local ports = inputs[node]
 		return headerHeight(node) + (if ports ~= nil then #ports else 0) * PORT_ROW
 	end
@@ -1479,7 +1545,112 @@ local function create(pluginRef: Plugin)
 		return port
 	end
 
+	local function makeNoteCard(node: Instance)
+		local origin = positions[node] or Vector2.zero
+
+		local frame = Instance.new("TextButton")
+		frame.Position = UDim2.fromOffset(origin.X, origin.Y)
+		frame.Size = UDim2.fromOffset(NODE_WIDTH, NOTE_HEIGHT)
+		frame.BackgroundColor3 = NOTE_BACKGROUND
+		frame.BorderColor3 = NODE_BORDER
+		frame.BorderSizePixel = 1
+		frame.Text = ""
+		frame.AutoButtonColor = false
+		frame.Parent = nodeLayer
+
+		-- The gummed strip along the top: what the note is dragged by, since the
+		-- body below takes its own clicks for editing. It takes no input of its
+		-- own, so a press on it reaches the card and starts a drag.
+		local strip = Instance.new("Frame")
+		strip.Size = UDim2.new(1, 0, 0, TITLE_HEIGHT)
+		strip.BackgroundColor3 = NOTE_HEADER
+		strip.BorderSizePixel = 0
+		strip.Parent = frame
+
+		local title = makeLabel(node.Name, NOTE_TEXT, true)
+		title.Size = UDim2.new(1, -PADDING * 2, 1, 0)
+		title.Position = UDim2.fromOffset(PADDING, 0)
+		title.Parent = strip
+
+		-- The note itself, editable in place. What is typed is committed to the
+		-- Text attribute only when the box loses focus, so a keystroke does not
+		-- schedule a rebuild that would tear the card out from under the caret.
+		local body = Instance.new("TextBox")
+		body.Position = UDim2.fromOffset(0, TITLE_HEIGHT)
+		body.Size = UDim2.new(1, 0, 1, -TITLE_HEIGHT)
+		body.BackgroundTransparency = 1
+		body.ClearTextOnFocus = false
+		body.MultiLine = true
+		body.TextWrapped = true
+		body.TextXAlignment = Enum.TextXAlignment.Left
+		body.TextYAlignment = Enum.TextYAlignment.Top
+		body.Font = Enum.Font.SourceSans
+		body.TextSize = 14
+		body.TextColor3 = NOTE_TEXT
+		body.PlaceholderText = "Write a note..."
+		body.PlaceholderColor3 = NOTE_TEXT:Lerp(NOTE_BACKGROUND, 0.5)
+		local stored = node:GetAttribute("Text")
+		body.Text = if typeof(stored) == "string" then stored else ""
+		body.Parent = frame
+
+		local pad = Instance.new("UIPadding")
+		pad.PaddingLeft = UDim.new(0, PADDING)
+		pad.PaddingRight = UDim.new(0, PADDING)
+		pad.PaddingTop = UDim.new(0, 4)
+		pad.PaddingBottom = UDim.new(0, 4)
+		pad.Parent = body
+
+		cards[node] = { frame = frame, strip = strip, tint = NOTE_HEADER, invalid = false }
+
+		-- Editing a note is picking it, so the panel and ribbon agree with the
+		-- canvas about what is selected. Focus is left on the box, so this does
+		-- not interrupt the typing that raised it.
+		body.Focused:Connect(function()
+			-- Drops the catcher so the note keeps the keys it is being typed into,
+			-- the same way a parameter field does.
+			setFieldFocused(true)
+			selectOnly(node)
+		end)
+
+		body.FocusLost:Connect(function()
+			setFieldFocused(false)
+
+			local current = node:GetAttribute("Text")
+			current = if typeof(current) == "string" then current else ""
+			if body.Text == current then
+				return
+			end
+			recorded("Edit note", function()
+				node:SetAttribute("Text", body.Text)
+			end)
+		end)
+
+		-- Dragging works off the strip and the card's own margins; the body,
+		-- being a text box, keeps its clicks for the caret.
+		frame.InputBegan:Connect(function(input)
+			if input.UserInputType ~= Enum.UserInputType.MouseButton1 then
+				return
+			end
+
+			grabKeyboard()
+			pickForDrag(node)
+
+			if selection[node] then
+				beginNodeDrag(node, input)
+			end
+		end)
+
+		carryDrag(frame)
+
+		overlay.watchForTooltip(strip, "Drag to move this note. Click the body to write in it.")
+	end
+
 	local function makeCard(node: Instance)
+		if isNote(node) then
+			makeNoteCard(node)
+			return
+		end
+
 		local ports = inputs[node]
 		local origin = positions[node] or Vector2.zero
 		local issues = AttributeSchema.issues(node)
@@ -2416,6 +2587,23 @@ local function create(pluginRef: Plugin)
 			end
 		end)
 
+		-- The canvas holds the keyboard for as long as the pointer is over it, so
+		-- the shortcuts are armed while the author works there and the keyboard is
+		-- handed back the moment the pointer moves off it -- onto the parameters,
+		-- say, where a field then takes it. This is watched on the canvas frame
+		-- rather than the background button so that moving onto a node card, which
+		-- sits over the background, still counts as being on the canvas. Grabbing
+		-- is refused while a field is focused (see grabKeyboard), so passing over
+		-- the canvas while editing a note does not snatch the keys from the note.
+		canvas.MouseEnter:Connect(function()
+			pointerOverCanvas = true
+			grabKeyboard()
+		end)
+		canvas.MouseLeave:Connect(function()
+			pointerOverCanvas = false
+			releaseKeyboard()
+		end)
+
 		-- Sliding the canvas and turning the wheel over it come from here, since
 		-- the background is what a press on empty canvas, or on a node, lands on.
 		carryDrag(background)
@@ -2573,6 +2761,11 @@ local function create(pluginRef: Plugin)
 
 		inspector.setList(scroll)
 
+		-- A parameter field reports its focus so the catcher can step aside for it
+		-- (see setFieldFocused); without this the catcher, being a focused text box
+		-- that eats every key, would swallow what is typed into the field.
+		inspector.onFieldFocus = setFieldFocused
+
 		-- The keyboard-focus holder behind the view's shortcuts (see the upvalue).
 		-- Parked off the top-left corner so its caret never shows, and invisible
 		-- besides. Focus is set in code, so where it sits does not matter to it.
@@ -2592,22 +2785,10 @@ local function create(pluginRef: Plugin)
 		-- Each key the author presses while the view holds focus edits this text.
 		-- The handler reads which key it was from how the text changed, then puts
 		-- the seed back; this is what stands in for the InputBegan a focused
-		-- TextBox does not raise for these keys.
+		-- TextBox does not raise for these keys. The seed is reset before every
+		-- grab rather than on focus lost, so nothing sets the catcher's text (and
+		-- risks stealing focus back to it) while a field is being edited.
 		catcher:GetPropertyChangedSignal("Text"):Connect(readKeyCatcher)
-
-		-- Focus lost to a parameter field or another window may leave the seed
-		-- half eaten; restoring it keeps the catcher ready for focus returning.
-		catcher.FocusLost:Connect(reseedKeyCatcher)
-
-		-- Turning to the canvas hands the view the keyboard. On the press so a
-		-- click to pick or drag arms the shortcuts too, and on entering it so a
-		-- hover is enough -- but never stealing focus out of a field being typed
-		-- in, which is what having a focused text box already means.
-		background.MouseEnter:Connect(function()
-			if UserInputService:GetFocusedTextBox() == nil then
-				grabKeyboard()
-			end
-		end)
 
 		-- Tracked on the root rather than the canvas so a drag that wanders off
 		-- the canvas keeps working until the mouse comes back or is released.
@@ -2642,11 +2823,13 @@ local function create(pluginRef: Plugin)
 		end
 	end)
 
-	-- Clicking into the view's window hands it the keyboard, so the shortcuts
-	-- are live the moment it is the window in front, not only after a click that
-	-- happens to land on the canvas.
-	widget.WindowFocused:Connect(grabKeyboard)
-
+	-- The view takes the keyboard when the author turns to the canvas -- hovering
+	-- it or clicking in it (see background and the cards) -- rather than the
+	-- moment the window comes to the front. Grabbing it on WindowFocused stole
+	-- focus out of a parameter field the instant it was clicked, since focusing a
+	-- field is itself what brings the window forward, leaving the field
+	-- uneditable. Hover and click arm the shortcuts before a node is ever picked,
+	-- so nothing is lost by waiting for them.
 	widget.WindowFocusReleased:Connect(endDrag)
 
 	settings().Studio.ThemeChanged:Connect(function()
