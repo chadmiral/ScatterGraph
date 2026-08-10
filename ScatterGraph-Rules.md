@@ -69,18 +69,23 @@ The folder is an organising convention, not something evaluation depends on: nod
 | `Points` | `ObjectValue` | `Points` | Upstream node that feeds this node |
 | `Asset` | `ObjectValue` (on `PlaceGeometryOnPoints` only) | `Asset` | In-scene template to clone (optional) |
 
+**`Points`** is an edge between two nodes, and is a port on the canvas. **`Asset`** is a reference into the scene, and is a row in the parameter panel.
+
 ### Data types
 
-A wire carries one of two kinds of thing, and each end of it is a port that takes or gives that kind:
+A wire between two nodes carries one of these kinds of thing, and each end of it is a port that takes or gives that kind:
 
 | Data type | What it is | Produced by | Read by | Port colour |
 |-----------|------------|-------------|---------|-------------|
 | **Points** | A cloud of positions | `ScatterPoints`, `ScatterPointsAroundPoints`, `SnapPointsToTerrain` | `ScatterPointsAroundPoints`, `SnapPointsToTerrain`, `PlaceGeometryOnPoints` | Blue |
 | **Instances** | The geometry a rule has placed in the world | `PlaceGeometryOnPoints` | `Output` | Green |
+| **SDF Grid** | A shape measured onto a box of voxels as the signed distance to its surface | *(nothing yet)* | *(nothing yet)* | Yellow |
 
-The Graph View draws every port in its type's colour — filled when something is wired to it, a ring of the same colour when nothing is — so what a wire may join reads off the canvas. A node type the plugin does not recognise has no type and is drawn grey.
+**SDF Grid** is declared and coloured but not yet carried by any wire: `SDFGrid.luau` builds such a field from a part, and the type is reserved for the node that will hand one to another node.
 
-Which node produces or reads which type lives in `src/shared/ScatterGraph/DataTypes.luau`. Evaluation itself does not check it: a node reads its input by wire name and takes whatever the upstream node returned.
+The Graph View draws every port in its type's colour — filled when something is wired to it, a ring of the same colour when nothing is — so what a wire may join reads off the canvas. A wire dropped on a slot that takes another type is refused with a warning, and one dropped on the body of a node goes to whichever of its slots takes what is being dragged. A node type the plugin does not recognise has no type, is drawn grey, and has no slots.
+
+Which node produces which type, and which slots each one reads, lives in `src/shared/ScatterGraph/DataTypes.luau`. Evaluation itself does not check types: a node reads its input by wire name and takes whatever the upstream node returned.
 
 **Typical chains:**
 
@@ -183,7 +188,7 @@ For each point from upstream, generates up to **`Count`** additional points in a
 
 **Output:** `{ Vector3 }` — cluster offset points only (does **not** pass through upstream seed positions; generates **`Count`** new points per upstream seed).
 
-**Note:** Upstream points are collected from all **`Points`** wires. Exclusion volumes are applied before clustering. Offsets that land outside the volume's footprint are dropped, so clusters seeded near an edge do not spill past it — expect fewer than **`Count`** points per seed there.
+**Note:** Upstream points are collected from all **`Points`** wires. [Exclusion volumes](#exclusion-volumes) are applied before clustering. Offsets that land outside the volume's footprint are dropped, so clusters seeded near an edge do not spill past it — expect fewer than **`Count`** points per seed there.
 
 ---
 
@@ -262,6 +267,43 @@ Graph entry point. Evaluates every child **`ObjectValue`** (each pointing at a r
 **Output:** `nil` (side effect is placed instances).
 
 Branch evaluation order does **not** affect placement results. Intersection avoidance is resolved globally after every branch has run (see [Cross-branch intersection avoidance](#cross-branch-intersection-avoidance)).
+
+---
+
+## Exclusion volumes
+
+A part tagged **`ExclusionVolume`** keeps points out of itself. Any point inside it is discarded, using the part's actual [shape](#volume-shapes) and orientation, so a rotated wedge excludes a wedge and not its bounding box.
+
+Exclusion volumes live in the place, not in the graph: a graph is shared between places, while what has to be kept clear — a road, a building footprint, a plaza — belongs to the place it was built in. Nothing in a graph refers to an exclusion volume, and adding or moving one changes no graph.
+
+### Which rules a volume excludes
+
+By default, all of them. A volume can instead name the rules it applies to, by giving it **`ObjectValue`** children whose **`Value`** points at an **`Output`** registry entry — the `ObjectValue` under a graph's `Output` node that names one rule:
+
+| Children of the volume | Excludes |
+|------------------------|----------|
+| None | Every rule of every graph in the place |
+| One `ObjectValue` → an `Output` entry | That rule only |
+| Several `ObjectValue`s | Each of the rules they point at |
+
+The children's names are not read, only their **`Value`**s, so name them whatever reads best in the Explorer.
+
+```
+Workspace
+└── PlazaExclusion            [ExclusionVolume]
+    ├── NoTrees      ObjectValue → ScatterGraphs.Forest.Output.Trees
+    └── NoBoulders   ObjectValue → ScatterGraphs.Forest.Output.Boulders
+```
+
+That volume keeps trees and boulders off the plaza while leaving every other rule — grass, say — to grow across it.
+
+A child pointing at nothing, or at anything that is not an `Output` entry, excludes nothing and warns once per run saying so. It does **not** fall back to excluding everything: a half-finished aim is not a licence to clear the place.
+
+### When exclusion is applied
+
+Within a rule, exclusion applies to the whole chain rather than only its last node. Points are tested in **`ScatterPointsAroundPoints`** (before clustering), **`SnapPointsToTerrain`** (before the raycast), and **`PlaceGeometryOnPoints`** (before placing), so a point inside an excluded volume is gone whichever of them a rule happens to use.
+
+Because a rule's identity comes from the `Output` entry that names it, a node shared between two rules is excluded according to whichever rule is being evaluated at the time — so sharing a **`ScatterPoints`** node between a targeted rule and an untargeted one behaves as each rule asks.
 
 ---
 
@@ -346,7 +388,7 @@ A rule that loses a large fraction of its placements between runs — usually a 
 | Tag | Applied to | Effect |
 |-----|------------|--------|
 | **`ScatterGraphVolume`** | `BasePart` | Volume evaluated by the plugin. Any [shape](#volume-shapes). Volumes sharing a biome definition are [unioned](#overlapping-volumes). |
-| **`ExclusionVolume`** | `BasePart` | Points inside this part are removed, using the part's actual [shape](#volume-shapes) and orientation. Applied after upstream evaluation in **`ScatterPointsAroundPoints`**, **`SnapPointsToTerrain`**, and **`PlaceGeometryOnPoints`**. |
+| **`ExclusionVolume`** | `BasePart` | Points inside this part are removed, using the part's actual [shape](#volume-shapes) and orientation. Applies to every rule, or only to the rules its **`ObjectValue`** children point at — see [Exclusion volumes](#exclusion-volumes). Tested in **`ScatterPointsAroundPoints`**, **`SnapPointsToTerrain`**, and **`PlaceGeometryOnPoints`**. |
 | **`NoTint`** | `MeshPart` | Skips color tinting from **`ColorRange`** on that part. |
 | **`ScatterGraphInstance`** | Placed instance | Applied to every instance the placer creates; marks it as the system's to sweep and re-place. Removed when the instance is promoted. |
 | **`ScatterGraphPromoted`** | Promoted instance | A hand-edited instance lifted out of the system (see [Persisting hand edits](#persisting-hand-edits)). Its point is kept clear on every run; deleting it retires the point for good. |
@@ -378,6 +420,7 @@ A rule that loses a large fraction of its placements between runs — usually a 
 | `PlaceGeometryOnPoints` | `NodeType`, `GeometryAssetID`, `ScaleRange`, `RotationType`, `ColorRange`, `AvoidIntersections`, `Radius`, `Priority`, `RuleId` |
 | `Output` registry entry | `NodeType` = `OutputNode` |
 | Scatter volume | `Enabled`, `BiomeDefinitionAssetID` |
+| Exclusion volume | *(no attributes; `ObjectValue` children aim it — see [Exclusion volumes](#exclusion-volumes))* |
 | Wire: `Points` | `NodeType` = `Points` |
 | Wire: `Asset` | `NodeType` = `Asset` |
 
@@ -402,6 +445,7 @@ lists. Deleting it just returns the node to the automatic column layout.
 |------|------|
 | `src/shared/ScatterGraph/ScatterGraph.client.lua` | Plugin entry; volume grouping, node registry, evaluation loop |
 | `src/shared/ScatterGraph/ScatterGraphHelpers.luau` | Terrain snap, clustering, placement, exclusion zones |
+| `src/shared/ScatterGraph/SDFGrid.luau` | A part's surface measured onto a box of voxels as the distance to it, and how a point is read back out of one. Not yet used by any node |
 | `src/shared/ScatterGraph/RulesWindow.luau` | "Spreadsheet View" dock widget: lists the place's graphs and the chosen graph's outputs, edits the attributes and Asset wire of the nodes feeding each one, and adds or deletes both graphs and rules |
 | `src/shared/ScatterGraph/GraphView.luau` | "Graph View" dock widget: one graph as a canvas of wired nodes that can be added, moved, rewired and deleted, beside the parameters of the selected node |
 | `src/shared/ScatterGraph/Graphs.luau` | Which graphs the place holds, and which one the Studio selection names for the Graph View button to open |

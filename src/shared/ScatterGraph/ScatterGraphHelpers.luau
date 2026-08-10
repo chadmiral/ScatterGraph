@@ -104,7 +104,7 @@ function M.scatterPointsAroundPoints(volumes, terrain, seed, points, count, inne
 
 	if outerRadius < innerRadius then
 		warn("Invalid inner & outer radii. Skipping")
-		return
+		return {}
 	end
 
 	-- Cluster offsets can push a point past the edge of a volume, so they are
@@ -318,23 +318,109 @@ function M.placeGeoOnPoints(
 	return instances
 end
 
+-- An exclusion volume: the part's own shape as a test, and which rules it keeps
+-- points out of.
+export type ExclusionZone = {
+	volume: BasePart,
+	contains: (Vector3) -> boolean,
+	-- The Output registry entries this volume excludes, or nil where it names
+	-- none and so excludes every rule in the place.
+	targets: { Instance }?,
+}
+
 function M.getExclusionFunction(volume: BasePart): (Vector3) -> boolean
 	return VolumeShape.containsPointFunction(volume)
 end
 
-function M.exclusionZoneFunctions(): { (Vector3) -> boolean }
-	local exclusionVolumes = CollectionService:GetTagged("ExclusionVolume")
-	local exclusionZoneFunctions = {}
+-- Is this what an exclusion volume's ObjectValue is meant to point at -- one of
+-- the entries under a graph's Output node, which is what names a single rule?
+local function isOutputEntry(target: Instance): boolean
+	if not target:IsA("ObjectValue") then
+		return false
+	end
 
-	for _, volume in exclusionVolumes do
+	local registry = target.Parent
+	return registry ~= nil and registry:GetAttribute("NodeType") == "Output"
+end
+
+-- Which rules a volume excludes, read from its ObjectValue children: each one
+-- points at the Output entry of a rule to keep out. A volume with no children
+-- names no rules and so excludes all of them, which is how every exclusion volume
+-- behaved before any of them could be aimed.
+--
+-- A child that points at nothing, or at something that is not an Output entry, is
+-- a half-finished aim rather than a licence to exclude everything: it excludes
+-- nothing and says so. This is the one place with a whole volume in hand to say
+-- it from, so it is said here, once a run, rather than once a rule.
+local function targetsOf(volume: BasePart): { Instance }?
+	local targets = nil
+
+	for _, child in volume:GetChildren() do
+		if child:IsA("ObjectValue") then
+			targets = targets or {}
+
+			if child.Value == nil then
+				warn(
+					"Exclusion volume " .. volume.Name .. ": its " .. child.Name .. " points at nothing. Set "
+						.. "it to the Output entry of the rule to exclude, or delete it to exclude every rule."
+				)
+			elseif not isOutputEntry(child.Value) then
+				warn(
+					"Exclusion volume " .. volume.Name .. ": its " .. child.Name .. " points at "
+						.. child.Value:GetFullName() .. ", which is not one of an Output node's entries, so it "
+						.. "excludes nothing."
+				)
+			else
+				table.insert(targets, child.Value)
+			end
+		end
+	end
+
+	return targets
+end
+
+-- Every part tagged ExclusionVolume, with the rules each one applies to. Built
+-- once a run: the tag is read once, each part's shape is worked out once, and
+-- anything wrong with how one is aimed is reported once.
+function M.exclusionZones(): { ExclusionZone }
+	local zones = {}
+
+	for _, volume in CollectionService:GetTagged("ExclusionVolume") do
 		if not volume:IsA("BasePart") then
 			continue
 		end
 
-		table.insert(exclusionZoneFunctions, M.getExclusionFunction(volume))
+		table.insert(zones, {
+			volume = volume,
+			contains = M.getExclusionFunction(volume),
+			targets = targetsOf(volume),
+		})
 	end
 
-	return exclusionZoneFunctions
+	return zones
+end
+
+-- The exclusion tests that apply to one rule: every volume that names it, and
+-- every volume that names no rule at all. `rule` is the Output entry that names
+-- the chain being evaluated.
+function M.exclusionZoneFunctions(zones: { ExclusionZone }, rule: Instance?): { (Vector3) -> boolean }
+	local functions = {}
+
+	for _, zone in zones do
+		local applies = false
+
+		if zone.targets == nil then
+			applies = true
+		elseif rule ~= nil then
+			applies = table.find(zone.targets, rule) ~= nil
+		end
+
+		if applies then
+			table.insert(functions, zone.contains)
+		end
+	end
+
+	return functions
 end
 
 function M.excludePoints(points: { Vector3 }, exclusionFunctions: { (Vector3) -> boolean }): { Vector3 }

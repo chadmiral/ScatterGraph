@@ -122,11 +122,23 @@ local currentOccupancy = nil
 -- the length of a single Evaluate press.
 local currentRun = nil
 local currentGraphKey = nil
+-- Every exclusion volume in the place, with the rules each one applies to. Read
+-- once a run rather than once a node: the tag does not change while a run is in
+-- flight, and a volume aimed at nothing is worth saying once.
+local currentExclusionZones = {}
+-- The exclusions that apply to the rule being evaluated. Set when a rule's chain
+-- begins, since the Output entry naming it is the only thing that knows which
+-- rule this is, and read by every node in that chain: a volume aimed at a rule
+-- excludes the whole of it, not only its terminal. Reset in evaluateGraph.
+local currentExclusionFunctions = {}
 
--- ruleKey and ruleName reach the terminal from the Output entry that names the
--- chain; every other node ignores them, so downstream calls leave them nil.
-evaluateNode = function(n, volumes, terrain, debugString, ruleKey, ruleName)
-	local exclusionFunctions = Helpers.exclusionZoneFunctions()
+-- `rule` is the Output entry that names the chain being evaluated. Only the
+-- Output node passes it -- it is the only node that knows -- so a call from
+-- anywhere else leaves it out and the rule already set stands for the chain.
+evaluateNode = function(n, volumes, terrain, debugString, rule)
+	if rule ~= nil then
+		currentExclusionFunctions = Helpers.exclusionZoneFunctions(currentExclusionZones, rule)
+	end
 
 	if n == nil then
 		warn("Nil GraphNode!")
@@ -139,6 +151,14 @@ evaluateNode = function(n, volumes, terrain, debugString, ruleKey, ruleName)
 		debugString = n.Parent.Name.."/"..n.Name.."->"..debugString
 	end
 
+	-- The rule's identity is worked out from the entry that names it, and reaches
+	-- only the node that entry points at: the terminal, which is what stamps and
+	-- records a placement under it.
+	local ruleKey, ruleName
+	if rule ~= nil then
+		ruleKey, ruleName = PlacementLedger.ruleKey(rule)
+	end
+
 	local nodeType = n:GetAttribute("NodeType")
 	local impl = nodeRegistry[nodeType]
 	if impl then
@@ -146,7 +166,7 @@ evaluateNode = function(n, volumes, terrain, debugString, ruleKey, ruleName)
 			node = n,
 			evaluateNode = evaluateNode,
 			debugString = debugString,
-			exclusionFunctions = exclusionFunctions,
+			exclusionFunctions = currentExclusionFunctions,
 			instanceFolder = InstanceFolder,
 			insertService = InsertService,
 			occupancy = currentOccupancy,
@@ -162,6 +182,9 @@ end
 
 local function evaluateGraph(g, volumes, terrain, graphKey)
 	currentGraphKey = graphKey
+	-- Nothing outside a rule is excluded from anything; the Output node below
+	-- fills this in as it reaches each rule.
+	currentExclusionFunctions = {}
 	currentOccupancy = OccupancyStore.new()
 	currentOccupancy.run = currentRun
 	currentOccupancy.graphKey = graphKey
@@ -250,6 +273,7 @@ local function onPluginButtonClicked()
 	-- placement pass below can tell a deletion from an ordinary re-run.
 	currentRun = PlacementLedger.beginRun()
 	currentRun:sweep()
+	currentExclusionZones = Helpers.exclusionZones()
 
 	for _, group in collectVolumeGroups() do
 		local scatterGraph = group.graph

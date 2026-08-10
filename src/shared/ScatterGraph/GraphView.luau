@@ -377,43 +377,47 @@ local function collectNodes(graph: Instance): { Instance }
 	return nodes
 end
 
--- The slots down the left of a node, top to bottom. The Output registry has one
--- per rule registered with it, plus an empty one so that another can be added by
--- dropping a wire on it; every other node reads points from a single Points
--- wire, and a source node reads nothing at all.
+-- The slots down the left of a node, top to bottom, each with the wire it holds
+-- and the slot it was built from -- which is what says where a wire dropped on it
+-- is written and what type it may carry.
 --
--- Each slot carries the data type it takes, which is what colours it. Every slot
--- on one node takes the same type today, so they all take it from the node.
+-- DataTypes declares the slots; the only ones not declared are the Output
+-- registry's, which are one per rule registered with it rather than a fixed list,
+-- plus an empty one so that another can be added by dropping a wire on it. A
+-- source node and a note declare none and read nothing.
 local function inputPortsOf(node: Instance)
-	local accepts = DataTypes.acceptedBy(node)
+	local ports = {}
 
-	if isOutput(node) then
-		local ports = {}
+	for _, slot in DataTypes.inputsOf(node) do
+		if slot.repeated then
+			local entries = {}
 
-		for _, child in node:GetChildren() do
-			if child:IsA("ObjectValue") then
-				table.insert(ports, { name = child.Name, wire = child, dataType = accepts })
+			for _, child in node:GetChildren() do
+				if child:IsA("ObjectValue") then
+					table.insert(entries, { name = child.Name, wire = child, slot = slot, dataType = slot.dataType })
+				end
 			end
+
+			table.sort(entries, function(a, b)
+				return a.name < b.name
+			end)
+
+			for _, entry in entries do
+				table.insert(ports, entry)
+			end
+
+			table.insert(ports, { name = "(new rule)", isNew = true, slot = slot, dataType = slot.dataType })
+		else
+			table.insert(ports, {
+				name = slot.label or slot.name,
+				wire = findWire(node, slot.name),
+				slot = slot,
+				dataType = slot.dataType,
+			})
 		end
-
-		table.sort(ports, function(a, b)
-			return a.name < b.name
-		end)
-
-		table.insert(ports, { name = "(new rule)", isNew = true, dataType = accepts })
-		return ports
 	end
 
-	-- A note reads nothing and feeds nothing.
-	if isNote(node) then
-		return {}
-	end
-
-	if node:GetAttribute("NodeType") == "ScatterPoints" then
-		return {}
-	end
-
-	return { { name = "Points", wire = findWire(node, "Points"), dataType = accepts } }
+	return ports
 end
 
 local function uniqueChildName(parent: Instance, base: string): string
@@ -1124,28 +1128,40 @@ local function create(pluginRef: Plugin)
 			return
 		end
 
+		-- A slot takes one kind of thing, and this is the gesture that would put
+		-- the wrong one in it. The ports say as much in their colours; a drop
+		-- aimed at one anyway is turned down rather than quietly making a wire
+		-- the node it feeds cannot read.
+		local produced = DataTypes.producedBy(source)
+		if produced ~= nil and port.dataType ~= nil and produced ~= port.dataType then
+			warn("ScatterGraph Graph view: " .. source.Name .. " produces " .. DataTypes.label(produced)
+				.. " and the " .. port.name .. " slot on " .. target.Name .. " takes "
+				.. DataTypes.label(port.dataType) .. ", so the connection was not made.")
+			return
+		end
+
+		local slot = port.slot
+
 		recorded("Connect " .. source.Name .. " to " .. target.Name, function()
 			pinPositions()
 
-			if isOutput(target) then
-				if port.isNew then
-					local entry = Instance.new("ObjectValue")
-					entry.Name = uniqueChildName(target, source.Name)
-					entry:SetAttribute("NodeType", "OutputNode")
-					entry.Value = source
-					entry.Parent = target
-				else
-					port.wire.Value = source
-				end
+			-- A repeated slot has a wire per thing registered with it, so a drop
+			-- on its empty port adds one named after what it registers.
+			if port.isNew then
+				local entry = Instance.new("ObjectValue")
+				entry.Name = uniqueChildName(target, source.Name)
+				entry:SetAttribute("NodeType", slot.wireNodeType)
+				entry.Value = source
+				entry.Parent = target
 				return
 			end
 
-			local wire = port.wire or findWire(target, "Points")
+			local wire = port.wire
 
 			if wire == nil then
 				wire = Instance.new("ObjectValue")
-				wire.Name = "Points"
-				wire:SetAttribute("NodeType", "Points")
+				wire.Name = slot.name
+				wire:SetAttribute("NodeType", slot.wireNodeType)
 				wire.Parent = target
 			end
 
@@ -1155,28 +1171,31 @@ local function create(pluginRef: Plugin)
 		rebuild()
 	end
 
-	local function disconnect(target: Instance, wire: ObjectValue)
+	local function disconnect(port)
 		recorded("Break connection", function()
 			pinPositions()
 
-			if isOutput(target) then
+			if port.slot.repeated then
 				-- An Output entry pointing at nothing is a rule that places
 				-- nothing and warns about it every evaluation, so the entry goes
 				-- rather than being emptied.
-				wire.Parent = nil
+				port.wire.Parent = nil
 			else
-				-- Elsewhere the empty wire stays, which is how the Explorer and
-				-- the Spreadsheet view keep showing the slot.
-				wire.Value = nil
+				-- A declared slot keeps its empty wire, which is how the Explorer
+				-- and the Spreadsheet view keep showing the slot.
+				port.wire.Value = nil
 			end
 		end)
 
 		rebuild()
 	end
 
-	-- Which slot a dropped wire landed on. Ports are small, so a drop that
-	-- misses is still taken by the node it landed on.
-	local function portAt(point: Vector2)
+	-- Which slot a dropped wire landed on, given what the wire is carrying. Ports
+	-- are small, so a drop that misses one is still taken by the node it landed
+	-- on -- and there it is the slot that takes what is being dragged, since a
+	-- node with two slots of different types is unambiguous about which one a
+	-- distance field or a cloud of points was meant for.
+	local function portAt(point: Vector2, dataType)
 		for node, ports in inputs do
 			for index, port in ports do
 				if (point - inputPortCenter(node, index)).Magnitude <= PORT_HIT then
@@ -1198,7 +1217,19 @@ local function create(pluginRef: Plugin)
 					-- On the Output node the free slot is the one at the bottom;
 					-- dropping on the body should add a rule, not quietly
 					-- repoint one that is already there.
-					return node, if isOutput(node) then ports[#ports] else ports[1]
+					local fallback = if isOutput(node) then ports[#ports] else ports[1]
+
+					if dataType ~= nil then
+						for _, port in ports do
+							if port.dataType == dataType then
+								-- Which of a repeated slot's ports the drop takes
+								-- is still the question the fallback answers.
+								return node, if port.slot.repeated then fallback else port
+							end
+						end
+					end
+
+					return node, fallback
 				end
 			end
 		end
@@ -1297,7 +1328,7 @@ local function create(pluginRef: Plugin)
 			-- what hands it to the panel and the ribbon.
 			applySelection()
 		elseif finished.kind == "wire" then
-			local target, port = portAt(finished.point or Vector2.zero)
+			local target, port = portAt(finished.point or Vector2.zero, DataTypes.producedBy(finished.node))
 			if target ~= nil and port ~= nil and finished.node.Parent ~= nil then
 				connect(finished.node, target, port)
 			end
@@ -1866,7 +1897,7 @@ local function create(pluginRef: Plugin)
 		corner.Parent = breaker
 
 		breaker.Activated:Connect(function()
-			disconnect(target, port.wire)
+			disconnect(port)
 		end)
 
 		carryDrag(breaker)

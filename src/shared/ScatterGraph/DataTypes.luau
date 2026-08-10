@@ -3,37 +3,63 @@
 
 	What travels along a wire, and what colour that is on the canvas.
 
-	A graph carries more than one kind of thing between its nodes. Points are a
-	cloud of positions, which is what the scattering and filtering nodes pass
-	between themselves. Instances are the geometry a rule has placed in the
-	world, which is what a terminal node hands to the Output registry. The two
-	are not interchangeable -- a filter has nothing to say about a placed model,
-	and the Output registry has nothing to place a bare point with -- so a port
-	says which of them it is, in the one colour that means that everywhere it
-	is drawn.
+	A graph carries more than one kind of thing between its nodes:
 
-	This is the one place that knows which node produces or reads which type.
-	The nodes themselves read their input by wire name and the evaluator passes
-	whatever the upstream node returned, so nothing downstream of here has to
-	agree; what a type buys is a canvas that can be read, and the ground for
-	checking a connection before it is made.
+	* Points, a cloud of positions, which is what the scattering and filtering
+	  nodes pass between themselves.
+	* Instances, the geometry a rule has placed in the world, which is what a
+	  terminal node hands to the Output registry.
+	* An SDF grid, a shape measured onto a box of voxels as the distance to its
+	  surface. Declared and coloured, but nothing produces or reads one yet:
+	  SDFGrid builds them and it is here for the node that will.
 
-	A node type this module has never heard of has no type rather than a wrong
-	one: its ports are drawn untyped and keep working as they did.
+	None of them are interchangeable -- a filter has nothing to say about a
+	placed model, and the Output registry has nothing to place a bare point with
+	-- so a port says which of them it is, in the one colour that means that
+	everywhere it is drawn.
+
+	This is also where a node's ports themselves are declared: which slots it
+	reads, in the order they are drawn down the left of its card, and what each
+	one takes. The view builds its ports from these and the runtime reads the
+	wires they make by name, so a node gaining an input is a line here rather
+	than an edit in both.
+
+	A node type this module has never heard of has no type and no slots rather
+	than wrong ones: it is drawn as a card with a grey port and nothing wires
+	into it.
 ]]
 
 local DataTypes = {}
 
-export type DataType = "Points" | "Instances"
+export type DataType = "Points" | "Instances" | "SDFGrid"
 
 local POINTS: DataType = "Points"
 local INSTANCES: DataType = "Instances"
+local SDF_GRID: DataType = "SDFGrid"
 
 DataTypes.POINTS = POINTS
 DataTypes.INSTANCES = INSTANCES
+DataTypes.SDF_GRID = SDF_GRID
 
--- What a node hands downstream, by NodeType. Only the scattering and filtering
--- nodes make points; the terminal node turns them into geometry, and so passes
+-- One slot down the left of a node's card, and the wire dropped on it.
+export type Slot = {
+	-- The child ObjectValue a wire into this slot is held as. A repeated slot has
+	-- no name of its own: each of its wires is named after what it registers.
+	name: string?,
+	-- What the canvas writes beside the port, where the wire's name reads poorly.
+	label: string?,
+	dataType: DataType,
+	-- The NodeType stamped on the wire. Usually the data type it carries, but the
+	-- Output registry's entries were named for the node they point at before any
+	-- of this was typed, and every graph in existence still has them that way.
+	wireNodeType: string,
+	-- One slot per wire already there, plus an empty one to add another, rather
+	-- than the single slot a named entry describes.
+	repeated: boolean?,
+}
+
+-- What a node hands downstream, by NodeType. The scattering and filtering nodes
+-- make points; the terminal node turns them into geometry, and so passes
 -- instances on to the Output registry. Output produces nothing -- it is where
 -- the graph ends -- and so has no port to colour.
 local PRODUCES: { [string]: DataType } = {
@@ -43,15 +69,27 @@ local PRODUCES: { [string]: DataType } = {
 	PlaceGeometryOnPoints = INSTANCES,
 }
 
--- What a node's input slots take, by NodeType. One type per node rather than
--- one per slot, because the only node with more than one slot is the Output
--- registry and every slot on it registers a rule. A node that comes to take two
--- different types will want this keyed by slot as well.
-local ACCEPTS: { [string]: DataType } = {
-	ScatterPointsAroundPoints = POINTS,
-	SnapPointsToTerrain = POINTS,
-	PlaceGeometryOnPoints = POINTS,
-	Output = INSTANCES,
+-- What a node reads, by NodeType, in the order the slots are drawn. A node with
+-- no entry here reads nothing: ScatterPoints is where a chain starts, and a note
+-- is not a working node at all.
+local INPUTS: { [string]: { Slot } } = {
+	ScatterPointsAroundPoints = {
+		{ name = "Points", dataType = POINTS, wireNodeType = POINTS },
+	},
+
+	SnapPointsToTerrain = {
+		{ name = "Points", dataType = POINTS, wireNodeType = POINTS },
+	},
+
+	PlaceGeometryOnPoints = {
+		{ name = "Points", dataType = POINTS, wireNodeType = POINTS },
+	},
+
+	-- The registry holds one entry per rule, so its slots are made as rules are
+	-- registered rather than declared here.
+	Output = {
+		{ dataType = INSTANCES, wireNodeType = "OutputNode", repeated = true },
+	},
 }
 
 -- Fixed rather than theme colours, for the same reason the title bars are: they
@@ -60,6 +98,7 @@ local ACCEPTS: { [string]: DataType } = {
 local COLORS: { [string]: Color3 } = {
 	Points = Color3.fromRGB(82, 152, 236),
 	Instances = Color3.fromRGB(92, 184, 108),
+	SDFGrid = Color3.fromRGB(226, 192, 68),
 }
 
 -- A port whose type is not known: grey, so it reads as unlabelled rather than
@@ -70,6 +109,7 @@ local UNTYPED = Color3.fromRGB(150, 150, 150)
 local LABELS: { [string]: string } = {
 	Points = "points",
 	Instances = "instances",
+	SDFGrid = "SDF grid",
 }
 
 function DataTypes.color(dataType: DataType?): Color3
@@ -94,10 +134,11 @@ function DataTypes.producedBy(node: Instance): DataType?
 	return if nodeType ~= nil then PRODUCES[nodeType] else nil
 end
 
--- What this node's input slots take, or nil if it reads nothing.
-function DataTypes.acceptedBy(node: Instance): DataType?
+-- The slots down the left of this node, in order. Empty for a node that reads
+-- nothing, and for one this module has never heard of.
+function DataTypes.inputsOf(node: Instance): { Slot }
 	local nodeType = nodeTypeOf(node)
-	return if nodeType ~= nil then ACCEPTS[nodeType] else nil
+	return (if nodeType ~= nil then INPUTS[nodeType] else nil) or {}
 end
 
 return DataTypes

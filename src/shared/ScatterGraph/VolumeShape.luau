@@ -20,6 +20,10 @@
 
 	Queries are exposed as closure factories so the per-part constants are built
 	once and reused across the thousands of points a graph produces.
+
+	Two kinds of query: whether a point or a vertical line is inside the shape,
+	which is what confines a scatter to its volumes, and how far a point is from
+	the shape's surface, which is what an SDFGrid is built out of.
 ]]
 
 local VolumeShape = {}
@@ -224,6 +228,84 @@ function VolumeShape.footprintFunction(part: BasePart): (number, number) -> bool
 	end
 end
 
+-- How far a world-space point is from the part's surface, negative inside it.
+--
+-- Exact for a block, a ball and a cylinder. For a wedge, a corner wedge, and
+-- anything else falling back to its bounding box, the distance is the furthest a
+-- point is outside any one of the solid's faces: exact inside the solid and
+-- along a face, and short of the truth off an edge or a corner, where the true
+-- distance is to the edge itself rather than to either face's plane. Reading
+-- short is the safe direction for a mask, which drops what reads as too close.
+--
+-- The part's transform is rigid -- Roblox scales a part by changing its Size,
+-- never its CFrame -- so a distance measured in object space is the same
+-- distance in the world.
+function VolumeShape.signedDistanceFunction(part: BasePart): (Vector3) -> number
+	local shape = VolumeShape.getShape(part)
+	local solid = buildSolid(part)
+	local cframe = part.CFrame
+	local size = part.Size
+	local halfX, halfY, halfZ = size.X * 0.5, size.Y * 0.5, size.Z * 0.5
+
+	local distanceInObjectSpace
+
+	if shape == "Ball" then
+		local radius = solid.sphereRadius or 0
+
+		distanceInObjectSpace = function(p: Vector3): number
+			return p.Magnitude - radius
+		end
+	elseif shape == "Cylinder" then
+		-- The axis runs along local X, so the shape is a box in (distance along
+		-- the axis, distance from it) and the box formula below applies in those
+		-- two dimensions.
+		local radius = solid.cylinderRadius or 0
+
+		distanceInObjectSpace = function(p: Vector3): number
+			local alongAxis = math.abs(p.X) - halfX
+			local fromAxis = math.sqrt(p.Y * p.Y + p.Z * p.Z) - radius
+			local outside = Vector2.new(math.max(alongAxis, 0), math.max(fromAxis, 0)).Magnitude
+
+			return outside + math.min(math.max(alongAxis, fromAxis), 0)
+		end
+	elseif shape == "Block" then
+		-- Outside the box the nearest surface point is the point clamped onto
+		-- it, so the distance is the length of however far each axis overshoots.
+		-- Inside, every overshoot is negative and the least negative of them is
+		-- the nearest face.
+		distanceInObjectSpace = function(p: Vector3): number
+			local overshoot = Vector3.new(
+				math.abs(p.X) - halfX,
+				math.abs(p.Y) - halfY,
+				math.abs(p.Z) - halfZ
+			)
+			local outside = Vector3.new(
+				math.max(overshoot.X, 0),
+				math.max(overshoot.Y, 0),
+				math.max(overshoot.Z, 0)
+			).Magnitude
+
+			return outside + math.min(math.max(overshoot.X, overshoot.Y, overshoot.Z), 0)
+		end
+	else
+		local planes = solid.planes
+
+		distanceInObjectSpace = function(p: Vector3): number
+			local furthest = -math.huge
+
+			for _, plane in planes do
+				furthest = math.max(furthest, plane.normal:Dot(p) - plane.distance)
+			end
+
+			return furthest
+		end
+	end
+
+	return function(point: Vector3): number
+		return distanceInObjectSpace(cframe:PointToObjectSpace(point))
+	end
+end
+
 -- World-space half extents of the part's bounding box. Each world axis picks up
 -- a contribution from all three local axes once the part is rotated, so a volume
 -- laid on its side is as wide as its Size.Y, not its Size.X.
@@ -240,6 +322,15 @@ local function worldHalfExtents(part: BasePart): Vector3
 		math.abs(xEdge.Y) + math.abs(yEdge.Y) + math.abs(zEdge.Y),
 		math.abs(xEdge.Z) + math.abs(yEdge.Z) + math.abs(zEdge.Z)
 	)
+end
+
+-- The opposite corners of the part's world-axis-aligned bounding box: the region
+-- anything sampling the part over a grid has to cover.
+function VolumeShape.worldBounds(part: BasePart): (Vector3, Vector3)
+	local extents = worldHalfExtents(part)
+	local center = part.CFrame.Position
+
+	return center - extents, center + extents
 end
 
 -- World-space X/Z bounds of the part's bounding box: the area its footprint can

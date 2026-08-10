@@ -8,7 +8,9 @@
 
 	A value is usually an attribute of the node. It can instead be a wire -- a
 	child ObjectValue of the same name -- which is how a node refers to an
-	instance. PlaceGeometryOnPoints takes its geometry either way.
+	instance. PlaceGeometryOnPoints takes its geometry either way. A wire named
+	here is a reference into the scene and is edited as a row; the wires between
+	two nodes are ports on the canvas instead, and are declared in DataTypes.
 
 	Attributes a node carries that are not listed here still appear -- their
 	editor is inferred from the value's type -- so an unrecognised node type, or
