@@ -69,6 +69,19 @@ The folder is an organising convention, not something evaluation depends on: nod
 | `Points` | `ObjectValue` | `Points` | Upstream node that feeds this node |
 | `Asset` | `ObjectValue` (on `PlaceGeometryOnPoints` only) | `Asset` | In-scene template to clone (optional) |
 
+### Data types
+
+A wire carries one of two kinds of thing, and each end of it is a port that takes or gives that kind:
+
+| Data type | What it is | Produced by | Read by | Port colour |
+|-----------|------------|-------------|---------|-------------|
+| **Points** | A cloud of positions | `ScatterPoints`, `ScatterPointsAroundPoints`, `SnapPointsToTerrain` | `ScatterPointsAroundPoints`, `SnapPointsToTerrain`, `PlaceGeometryOnPoints` | Blue |
+| **Instances** | The geometry a rule has placed in the world | `PlaceGeometryOnPoints` | `Output` | Green |
+
+The Graph View draws every port in its type's colour — filled when something is wired to it, a ring of the same colour when nothing is — so what a wire may join reads off the canvas. A node type the plugin does not recognise has no type and is drawn grey.
+
+Which node produces or reads which type lives in `src/shared/ScatterGraph/DataTypes.luau`. Evaluation itself does not check it: a node reads its input by wire name and takes whatever the upstream node returned.
+
 **Typical chains:**
 
 ```
@@ -395,6 +408,7 @@ lists. Deleting it just returns the node to the automatic column layout.
 | `src/shared/ScatterGraph/NodeInspector.luau` | The attribute panel both windows use: a row and a suitable editor for every value of every node it is given |
 | `src/shared/ScatterGraph/GraphUi.luau` | Shared window furniture: theme colours, the tooltip and dropdown Roblox does not provide, and the undo recording every edit runs inside |
 | `src/shared/ScatterGraph/AttributeSchema.luau` | Which values each node type takes, which editor it gets, and the description shown on hover |
+| `src/shared/ScatterGraph/DataTypes.luau` | What travels along a wire: which node produces or reads points or instances, and the colour each type is drawn in |
 | `src/shared/ScatterGraph/SequenceEditor.luau` | Popout keypoint editor for the `SlopeFilter` and `ColorRange` sequences, with a colour picker for the latter |
 | `src/shared/ScatterGraph/VolumeShape.luau` | Per-shape volume geometry: containment, footprint, and raycast extent for every part shape |
 | `src/shared/ScatterGraph/VolumeGroup.luau` | The volumes sharing one biome definition, queried as a single unioned region |

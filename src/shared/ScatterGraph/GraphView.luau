@@ -52,6 +52,7 @@ local AssetService = game:GetService("AssetService")
 local UserInputService = game:GetService("UserInputService")
 local Selection = game:GetService("Selection")
 
+local DataTypes = require(script.Parent:WaitForChild("DataTypes"))
 local GraphUi = require(script.Parent:WaitForChild("GraphUi"))
 local Graphs = require(script.Parent:WaitForChild("Graphs"))
 local NodeInspector = require(script.Parent:WaitForChild("NodeInspector"))
@@ -87,6 +88,11 @@ local NODE_WIDTH = 176
 local TITLE_HEIGHT = 24
 local PORT_ROW = 20
 local PORT_SIZE = 10
+-- A port is drawn in the colour of the type it carries, filled when something is
+-- wired to it and a ring of that colour around a hole when nothing is. This is
+-- how thick that ring is: enough of the type colour left to read at a glance,
+-- enough of a hole left to tell a full port from an empty one.
+local PORT_RING = 2
 -- How close a dropped wire has to land to count as hitting a port. Larger than
 -- the port itself, because the port is small and the gesture is not precise.
 local PORT_HIT = 14
@@ -375,13 +381,18 @@ end
 -- per rule registered with it, plus an empty one so that another can be added by
 -- dropping a wire on it; every other node reads points from a single Points
 -- wire, and a source node reads nothing at all.
+--
+-- Each slot carries the data type it takes, which is what colours it. Every slot
+-- on one node takes the same type today, so they all take it from the node.
 local function inputPortsOf(node: Instance)
+	local accepts = DataTypes.acceptedBy(node)
+
 	if isOutput(node) then
 		local ports = {}
 
 		for _, child in node:GetChildren() do
 			if child:IsA("ObjectValue") then
-				table.insert(ports, { name = child.Name, wire = child })
+				table.insert(ports, { name = child.Name, wire = child, dataType = accepts })
 			end
 		end
 
@@ -389,7 +400,7 @@ local function inputPortsOf(node: Instance)
 			return a.name < b.name
 		end)
 
-		table.insert(ports, { name = "(new rule)", isNew = true })
+		table.insert(ports, { name = "(new rule)", isNew = true, dataType = accepts })
 		return ports
 	end
 
@@ -402,7 +413,7 @@ local function inputPortsOf(node: Instance)
 		return {}
 	end
 
-	return { { name = "Points", wire = findWire(node, "Points") } }
+	return { { name = "Points", wire = findWire(node, "Points"), dataType = accepts } }
 end
 
 local function uniqueChildName(parent: Instance, base: string): string
@@ -1513,9 +1524,13 @@ local function create(pluginRef: Plugin)
 	local function beginWireDrag(node: Instance)
 		clearPendingWire()
 
+		-- The trail out of a port is drawn in that port's type colour, being the
+		-- same thing being carried; a wire already made is a neutral line, since
+		-- the ports at its ends say what it is and a canvas of coloured wires
+		-- would say it several dozen times over.
 		local line = Instance.new("Frame")
 		line.AnchorPoint = Vector2.new(0.5, 0.5)
-		line.BackgroundColor3 = color(Enum.StudioStyleGuideColor.LinkText)
+		line.BackgroundColor3 = DataTypes.color(DataTypes.producedBy(node))
 		line.BorderSizePixel = 0
 		line.Size = UDim2.fromOffset(1, WIRE_THICKNESS)
 		line.Position = UDim2.fromOffset(outputPortCenter(node).X, outputPortCenter(node).Y)
@@ -1526,14 +1541,23 @@ local function create(pluginRef: Plugin)
 		drag = { kind = "wire", node = node, point = outputPortCenter(node) }
 	end
 
-	local function makePort(parent: GuiObject, center: Vector2, filled: boolean): TextButton
+	-- A port is a circle in the colour of the data type it carries, so what a
+	-- wire is allowed to join reads off the canvas rather than out of the node
+	-- reference. Whether it is connected is said by the fill instead: a full port
+	-- is a solid disc, an empty one a ring of the same colour around the colour
+	-- an empty field is drawn in. Colour therefore only ever means type, which is
+	-- what makes it worth reading.
+	local function makePort(
+		parent: GuiObject,
+		center: Vector2,
+		filled: boolean,
+		dataType: DataTypes.DataType?
+	): TextButton
 		local port = Instance.new("TextButton")
 		port.AnchorPoint = Vector2.new(0.5, 0.5)
 		port.Position = UDim2.fromOffset(center.X, center.Y)
 		port.Size = UDim2.fromOffset(PORT_SIZE, PORT_SIZE)
-		port.BackgroundColor3 = color(
-			if filled then Enum.StudioStyleGuideColor.LinkText else Enum.StudioStyleGuideColor.InputFieldBackground
-		)
+		port.BackgroundColor3 = DataTypes.color(dataType)
 		port.BorderColor3 = color(Enum.StudioStyleGuideColor.Border)
 		port.Text = ""
 		port.AutoButtonColor = false
@@ -1543,6 +1567,23 @@ local function create(pluginRef: Plugin)
 		local corner = Instance.new("UICorner")
 		corner.CornerRadius = UDim.new(1, 0)
 		corner.Parent = port
+
+		-- The hole in an empty port. A frame rather than a smaller port drawn
+		-- over a larger one, and one that takes no input of its own, so a press
+		-- in the middle of a port still reaches the button underneath it.
+		if not filled then
+			local hole = Instance.new("Frame")
+			hole.AnchorPoint = Vector2.new(0.5, 0.5)
+			hole.Position = UDim2.fromScale(0.5, 0.5)
+			hole.Size = UDim2.fromOffset(PORT_SIZE - PORT_RING * 2, PORT_SIZE - PORT_RING * 2)
+			hole.BackgroundColor3 = color(Enum.StudioStyleGuideColor.InputFieldBackground)
+			hole.BorderSizePixel = 0
+			hole.Parent = port
+
+			local holeCorner = Instance.new("UICorner")
+			holeCorner.CornerRadius = UDim.new(1, 0)
+			holeCorner.Parent = hole
+		end
 
 		carryDrag(port)
 		return port
@@ -1734,10 +1775,12 @@ local function create(pluginRef: Plugin)
 		end
 
 		if not isOutput(node) then
-			local port = makePort(frame, Vector2.new(NODE_WIDTH, TITLE_HEIGHT + PORT_ROW / 2), true)
+			local produces = DataTypes.producedBy(node)
+			local port = makePort(frame, Vector2.new(NODE_WIDTH, TITLE_HEIGHT + PORT_ROW / 2), true, produces)
 			overlay.watchForTooltip(
 				port,
-				"The points this node produces. Drag from here onto another node to feed it."
+				"The " .. DataTypes.label(produces)
+					.. " this node produces. Drag from here onto another node to feed it."
 			)
 
 			port.InputBegan:Connect(function(input)
@@ -1763,13 +1806,14 @@ local function create(pluginRef: Plugin)
 			label.Parent = frame
 
 			local connected = entry.wire ~= nil and entry.wire.Value ~= nil
-			local port = makePort(frame, Vector2.new(0, top + PORT_ROW / 2), connected)
+			local port = makePort(frame, Vector2.new(0, top + PORT_ROW / 2), connected, entry.dataType)
 
 			overlay.watchForTooltip(
 				port,
 				if entry.isNew
 					then "An empty slot. Drop a wire here to register another rule with this Output."
-					else "What this node reads. Drop a wire from another node's right-hand port here to change it."
+					else "The " .. DataTypes.label(entry.dataType)
+						.. " this node reads. Drop a wire from another node's right-hand port here to change it."
 			)
 		end
 
