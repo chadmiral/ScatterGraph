@@ -95,15 +95,18 @@ local BREAK_SIZE = 10
 local COLUMN_GAP = 72
 local ROW_GAP = 24
 local MARGIN = 40
--- What one notch of the wheel steps between: far enough out to see a large graph
--- whole, far enough in that a node's text is still worth reading.
---
--- Every stop is a whole tenth, which is what keeps ten graph pixels a whole
--- number of screen pixels. Screen offsets are integers, so a zoom that made the
--- spacing fractional would have the grid tiling round every step and drift away
--- from the nodes across the canvas -- a tenth cannot.
-local ZOOM_STOPS = { 0.3, 0.4, 0.5, 0.6, 0.8, 1, 1.2, 1.5, 2, 2.5 }
-local ZOOM_DEFAULT = table.find(ZOOM_STOPS, 1) or 1
+-- How far the wheel can zoom: far enough out to see a large graph whole, far
+-- enough in that a node's text is still worth reading. Zoom runs continuously
+-- between the two rather than snapping to fixed stops, so a turn scales smoothly
+-- and a high-resolution wheel's fractional notches are not rounded away and lost.
+-- Each notch multiplies the zoom by the step, which is what makes one turn feel
+-- like the same amount of zoom whatever the canvas is already at. The grid tiling
+-- rounds to whole pixels at any zoom (see refreshGrid), so a fractional zoom no
+-- longer needs to be avoided.
+local ZOOM_MIN = 0.1
+local ZOOM_MAX = 2.5
+local ZOOM_DEFAULT = 1
+local ZOOM_WHEEL_STEP = 1.075
 
 -- A title bar is coloured by what its node does, so a chain reads at a glance:
 -- green makes points, teal derives more points from them, brown puts them on the
@@ -436,11 +439,9 @@ local function create(pluginRef: Plugin)
 	-- same set however many are in it.
 	local selection: { [Instance]: boolean } = {}
 	-- Where the canvas has been scrolled to, in view pixels, and how far it is
-	-- zoomed: a node at graph point p is drawn at pan + p * zoom. The zoom is one
-	-- of the stops rather than any value, so it is held as which one.
+	-- zoomed: a node at graph point p is drawn at pan + p * zoom.
 	local pan = Vector2.zero
-	local zoomStop = ZOOM_DEFAULT
-	local zoom = ZOOM_STOPS[zoomStop]
+	local zoom = ZOOM_DEFAULT
 	-- The panel's share of the window, moved by dragging the divider. Held here
 	-- rather than rebuilt from the constant so a theme change or a graph switch
 	-- keeps the width the author dragged it to.
@@ -1463,15 +1464,17 @@ local function create(pluginRef: Plugin)
 			return
 		end
 
-		local stop = math.clamp(zoomStop + math.round(notches), 1, #ZOOM_STOPS)
+		-- Geometric so a notch is the same proportion of zoom at either end of the
+		-- range, and raised to the notch count so a fractional wheel delta scales
+		-- by that fraction rather than being rounded to a whole step or to nothing.
+		local target = math.clamp(zoom * ZOOM_WHEEL_STEP ^ notches, ZOOM_MIN, ZOOM_MAX)
 
-		if stop == zoomStop then
+		if target == zoom then
 			return
 		end
 
 		local held = (at - pan) / zoom
-		zoomStop = stop
-		zoom = ZOOM_STOPS[zoomStop]
+		zoom = target
 		pan = at - held * zoom
 		applyView()
 
@@ -1948,7 +1951,7 @@ local function create(pluginRef: Plugin)
 		end
 	end
 
-	-- Frames a set of nodes: the zoom comes down to a stop they fit inside and
+	-- Frames a set of nodes: the zoom comes down to where they fit inside and
 	-- the canvas slides to centre them. `only`, when given, frames just the nodes
 	-- it holds; otherwise every node on the canvas is framed. Returns whether it
 	-- found anything to frame, so a caller can fall back when it did not.
@@ -1974,25 +1977,17 @@ local function create(pluginRef: Plugin)
 			return false
 		end
 
-		-- The largest stop the nodes fit at, with a margin left round them so the
+		-- The largest zoom the nodes fit at, with a margin left round them so the
 		-- outermost are not flush against the edge. Never past actual size,
 		-- however few there are: a two node graph blown up to fill the canvas is
-		-- not what asking to see it means.
+		-- not what asking to see it means. A zero span in a direction (a lone node,
+		-- or a column of them) fits at any zoom, so it does not hold the zoom in.
 		local room = canvas.AbsoluteSize - Vector2.new(MARGIN, MARGIN) * 2
 		local span = high - low
-		local stop = 1
+		local fitX = if span.X > 0 then room.X / span.X else math.huge
+		local fitY = if span.Y > 0 then room.Y / span.Y else math.huge
 
-		for index = ZOOM_DEFAULT, 1, -1 do
-			local candidate = ZOOM_STOPS[index]
-
-			if span.X * candidate <= room.X and span.Y * candidate <= room.Y then
-				stop = index
-				break
-			end
-		end
-
-		zoomStop = stop
-		zoom = ZOOM_STOPS[zoomStop]
+		zoom = math.clamp(math.min(fitX, fitY, ZOOM_DEFAULT), ZOOM_MIN, ZOOM_MAX)
 
 		-- A span too big for even the smallest stop is shown from its top-left
 		-- corner rather than its middle, since that is where reading one starts.
