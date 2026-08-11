@@ -10,10 +10,11 @@ This document describes every node type, attribute, wire, tag, and volume settin
 
 1. The plugin finds all instances tagged **`ScatterGraphVolume`**.
 2. Volumes with **`Enabled`** = `true` are grouped by the biome graph they link to (see [Scatter volume](#scatter-volume)), and each group is evaluated **once** for all of its volumes (see [Overlapping volumes](#overlapping-volumes)).
-3. It finds children of the graph root with **`NodeType`** = **`Output`** and evaluates each one.
-4. **`Output`** nodes follow **`ObjectValue`** wires to terminal **`PlaceGeometryOnPoints`** nodes.
-5. Each node walks upstream through **`Points`** wires until it reaches a source **`ScatterPoints`** node.
-6. Points pass through optional filters (exclusion volumes, terrain snap, slope/material filters) before geometry is cloned.
+3. The ground the group covers settles the [distance field grid](#the-distance-field-grid) for the whole evaluation, before any node runs.
+4. It finds children of the graph root with **`NodeType`** = **`Output`** and evaluates each one.
+5. **`Output`** nodes follow **`ObjectValue`** wires to terminal **`PlaceGeometryOnPoints`** nodes.
+6. Each node walks upstream through **`Points`** wires until it reaches a source **`ScatterPoints`** node. The rule being evaluated and the grid go down with the call, so every node in a chain sees them.
+7. Points pass through optional filters (exclusion volumes, terrain snap, slope/material filters) before geometry is cloned.
 
 **Registered node types** (the `NodeType` attribute must match exactly):
 
@@ -23,6 +24,8 @@ This document describes every node type, attribute, wire, tag, and volume settin
 | `ScatterPoints` | Generates initial point cloud |
 | `ScatterPointsAroundPoints` | Expands each upstream point into a local cluster |
 | `SnapPointsToTerrain` | Raycasts to terrain; filters by slope and material |
+| `MaterialSDF2D` | Measures how far every spot of ground under the volumes is from named terrain materials, seen from above |
+| `Number` | Holds one number for other nodes to read |
 | `PlaceGeometryOnPoints` | Clones and places asset geometry at each point |
 
 The biome root model uses **`NodeType`** = **`ScatterGraph`**. It is a container only and is not evaluated directly.
@@ -79,13 +82,35 @@ A wire between two nodes carries one of these kinds of thing, and each end of it
 |-----------|------------|-------------|---------|-------------|
 | **Points** | A cloud of positions | `ScatterPoints`, `ScatterPointsAroundPoints`, `SnapPointsToTerrain` | `ScatterPointsAroundPoints`, `SnapPointsToTerrain`, `PlaceGeometryOnPoints` | Blue |
 | **Instances** | The geometry a rule has placed in the world | `PlaceGeometryOnPoints` | `Output` | Green |
-| **SDF Grid** | A shape measured onto a box of voxels as the signed distance to its surface | *(nothing yet)* | *(nothing yet)* | Yellow |
+| **SDF Grid 2D** | A shape on the ground measured onto a rectangle of cells as the signed distance to its edge, seen from above | `MaterialSDF2D` | `ScatterPoints`, `ScatterPointsAroundPoints`, `SnapPointsToTerrain` | Yellow |
+| **Number** | A single value | `Number` | `ScatterPoints`, `ScatterPointsAroundPoints`, `SnapPointsToTerrain` | Violet |
 
-**SDF Grid** is declared and coloured but not yet carried by any wire: `SDFGrid.luau` builds such a field from a part, and the type is reserved for the node that will hand one to another node.
+A **Number** port left unwired stands at its own default rather than at nothing, so wiring one is a way to make several nodes agree on a value, not a requirement.
 
 The Graph View draws every port in its type's colour — filled when something is wired to it, a ring of the same colour when nothing is — so what a wire may join reads off the canvas. A wire dropped on a slot that takes another type is refused with a warning, and one dropped on the body of a node goes to whichever of its slots takes what is being dragged. A node type the plugin does not recognise has no type, is drawn grey, and has no slots.
 
 Which node produces which type, and which slots each one reads, lives in `src/shared/ScatterGraph/DataTypes.luau`. Evaluation itself does not check types: a node reads its input by wire name and takes whatever the upstream node returned.
+
+### The distance field grid
+
+A field is **flat**. Scattering is a top-down business — points are spread across a footprint and dropped onto the ground — so what a mask needs to know is how far a spot is from water or from sand *as seen from above*, and a rectangle of cells answers that at a fraction of the cost of a box of them. A field has no height at all: sampling one reads the point's X and Z and ignores its Y, so a point 500 studs in the air reads exactly what the ground below it reads.
+
+**What ground a field covers is the scatter volumes' to decide, not the node's.** The plugin works the rectangle out from the group's bounds before the first **`Output`** node is reached, and it goes down the graph with the evaluation, so every field in one evaluation covers the same ground. How finely that rectangle is divided is the one part the node measuring a field asks for, through its **`VoxelSize`**. Two fields at different cell sizes are still read the same way — by sampling a world position rather than an index — so they need not line up cell for cell.
+
+| Part of the grid | How it is decided |
+|------------------|-------------------|
+| **Extent** | The X and Z bounds of every volume in the group, snapped out to whole cells and padded by two of them, so a field carries on a little way past the ground being scattered. A coarse field therefore reaches further out than a fine one over the same volumes. |
+| **Cell size** | The measuring node's **`VoxelSize`**, **4 studs** by default — terrain's own grid, the finest a material boundary is known to. Doubles to 8, 16 and so on until the field fits the ten million cells one may hold, warning when it does. |
+| **Origin** | The world X and Z of the centre of cell `(0, 0)`, half a cell in from the corner of that rectangle. |
+| **Resolution** | Cell counts across X and Z, at least 2. |
+
+A 160 × 160 stud footprint comes out as 45 × 45 cells at the default 4 studs. The two 389 × 749 stud footprints of a biome evaluated as one group come out as 194 × 285 cells of 4 studs — 55,290 of them, about 200 ms to measure a field over, most of which is reading the terrain rather than measuring anything. At 1 stud the same ground is 762 × 1123 cells and about 530 ms, so a fine field over a whole biome is affordable in a way a 3D one never was.
+
+Because the count grows as the square of the ground rather than the cube, the ten million cell ceiling is a backstop against a mistyped parameter rather than a limit real work meets: it is twelve thousand studs square at 4 studs.
+
+Cell size buys accuracy near a boundary, not shape: the material is only ever known per 4-stud terrain voxel, so a finer field divides the same blocky patches more finely rather than finding a truer edge.
+
+`SDFGrid2D.layoutFor` in `src/shared/ScatterGraph/SDFGrid2D.luau` is what settles it.
 
 **Typical chains:**
 
@@ -164,9 +189,12 @@ Generates an initial point cloud using a simplified Poisson-disc grid: one jitte
 | **`Seed`** | `number` | Yes | Random seed. Controls jitter within each grid cell, and seeds the stream that downstream nodes draw from for scale, rotation, and the slope filter. |
 | **`Spacing`** | `number` | Yes | Target minimum distance between points (studs). Cell size = `Spacing / sqrt(2)`. |
 
-**Inputs:** None (source node).
+| Wire | Required | Description |
+|------|----------|-------------|
+| **`SDFMask`** | No | A [distance field](#sdf-masking) to test candidates against. Nothing wired means nothing masked. |
+| **`MaskDistance`** | No | How far off that field a candidate must be. Defaults to `0`. |
 
-**Output:** `{ Vector3 }` — world-space positions.
+**Output:** `{ Vector3 }` — world-space positions, at the middle of the volume group's vertical span until something snaps them.
 
 ---
 
@@ -185,6 +213,8 @@ For each point from upstream, generates up to **`Count`** additional points in a
 | Wire | Required | Description |
 |------|----------|-------------|
 | **`Points`** | Yes | Upstream node (typically **`ScatterPoints`**). |
+| **`SDFMask`** | No | A [distance field](#sdf-masking) to test the cluster points against. Nothing wired means nothing masked. |
+| **`MaskDistance`** | No | How far off that field a cluster point must be. Defaults to `0`. |
 
 **Output:** `{ Vector3 }` — cluster offset points only (does **not** pass through upstream seed positions; generates **`Count`** new points per upstream seed).
 
@@ -207,8 +237,12 @@ Raycasts each point downward through the scatter volume to find terrain. Snaps s
 | Wire | Required | Description |
 |------|----------|-------------|
 | **`Points`** | Yes | Upstream node providing candidate positions. |
+| **`SDFMask`** | No | A [distance field](#sdf-masking) to test the snapped points against. Nothing wired means nothing masked. |
+| **`MaskDistance`** | No | How far off that field a snapped point must be. Defaults to `0`. |
 
 **Output:** `{ Vector3 }` — terrain-snapped, filtered positions, all inside the volume.
+
+The mask is applied **after** the snap, so a point is measured against the field where it ends up rather than where it started. This is the node to mask on when the field measures terrain.
 
 **Example `SlopeFilter` values:**
 
@@ -217,6 +251,50 @@ Raycasts each point downward through the scatter volume to find terrain. Snaps s
 - Mid-slope peak: use multiple keypoints so density peaks between flat and vertical.
 
 Set via `SetAttribute("SlopeFilter", NumberSequence.new(...))` in Studio so the attribute serializes correctly.
+
+---
+
+### MaterialSDF2D
+
+Source node. Measures where named terrain materials are into a flat signed distance field over the ground being scattered: every cell holds how far it is from the nearest ground whose surface is one of those materials, negative on the material itself. Something reading the field can then hold points a distance clear of water, or to the edge of sand, without touching the terrain itself.
+
+Materials are named as strings, which is what keeps the node place-agnostic: a graph is shared between places and may point at nothing in one of them, but `Water` means water everywhere.
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **`NodeType`** | `string` | Yes | **`MaterialSDF2D`** |
+| **`Materials`** | `string` | Yes | Comma-separated list of terrain material names to measure from (e.g. `Water,Sand`). Spelled as in the Terrain editor. Surrounding spaces and repeats are ignored; a name that is not a material is warned about and skipped. |
+| **`VoxelSize`** | `number` | No | The edge of one cell of the field, in studs. Defaults to **`4`**, the grid terrain keeps material on. Smaller sharpens the distances around the material; larger is coarser and cheaper. A value of zero or less falls back to 4 with a warning. |
+
+**Inputs:** None (source node).
+
+**Output:** an [SDF Grid 2D](#data-types) — `{ origin, voxelSize, resolution, dimensions, distances, source }`, where `origin`, `resolution` and `dimensions` are `Vector2`s of world X and Z. Read back with `SDFGrid2D.sample(grid, worldPoint)`, which ignores the point's Y.
+
+**The field:**
+
+- **What a spot's material is.** What is seen looking straight down at it: the topmost terrain voxel with anything in it, within the height the volumes span. That is the same surface **`SnapPointsToTerrain`** casts its rays onto, so a mask and the points it masks agree about the ground. Water reads as water because water is what is on top there, and the ground under a lake is not sand as far as this node is concerned — nor is buried material anything at all. In the Elwynn biome, `Ground` is the surface of 1,814 of 55,290 cells while `Grass` is 46,041 of them.
+- **Where it is measured.** Over [the ground the scatter volumes set](#the-distance-field-grid), which the node does not choose, divided into cells of its own **`VoxelSize`**, which it does. A point sampled beyond the edge of the grid is still answered, and the answer is never nearer than the truth.
+- **What the numbers mean.** Zero on the boundary between the material and everything else, negative on it, positive off it, in studs. Distances are measured from cell centre to cell centre and then brought half a cell in, which puts the zero crossing on the edges the two sides share. A voxel one tenth full of water is water: anything keeping clear of a shoreline should keep clear of all of it. A cell counts as the material if any part of a terrain voxel of it lies in there — so a coarse cell takes in several terrain columns and a fine one is one of several taking in the same column — which spreads the material out rather than dropping it.
+- **When there is none of it.** A material that is nowhere on the surface in range leaves every cell reading as astronomically far away, not zero, so a mask over it simply never rejects anything.
+
+**Cost:** the terrain is read a patch at a time, top down, and each patch stops being read as soon as every column in it has found its surface — so nothing below the ground is read at all. The distances are then worked out with a separable exact distance transform, two passes over the cells rather than a search around each one. The field is measured once per evaluation and reused by every rule that masks against it, so wiring one node's field into several rules costs no more than one.
+
+**Read by:** [SDF masking](#sdf-masking) on **`ScatterPoints`**, **`ScatterPointsAroundPoints`** and **`SnapPointsToTerrain`**.
+
+---
+
+### Number
+
+Source node. Holds one number and hands it to everything wired to it. There is nothing to compute; the node exists so that a figure several rules depend on — a mask distance, typically — is one thing in one place rather than the same number typed into each of them. Change the node and every rule reading it changes together.
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **`NodeType`** | `string` | Yes | **`Number`** |
+| **`Value`** | `number` | Yes | The number handed to every wire out of this node. |
+
+**Inputs:** None (source node).
+
+**Output:** a [Number](#data-types). A node with no **`Value`** set produces nothing and warns; a slot reading it falls back to its own default.
 
 ---
 
@@ -304,6 +382,39 @@ A child pointing at nothing, or at anything that is not an `Output` entry, exclu
 Within a rule, exclusion applies to the whole chain rather than only its last node. Points are tested in **`ScatterPointsAroundPoints`** (before clustering), **`SnapPointsToTerrain`** (before the raycast), and **`PlaceGeometryOnPoints`** (before placing), so a point inside an excluded volume is gone whichever of them a rule happens to use.
 
 Because a rule's identity comes from the `Output` entry that names it, a node shared between two rules is excluded according to whichever rule is being evaluated at the time — so sharing a **`ScatterPoints`** node between a targeted rule and an untargeted one behaves as each rule asks.
+
+---
+
+## SDF masking
+
+Where an exclusion volume is a shape in the place that keeps points out of itself, a mask is a **distance field wired into a node**, and it keeps points a chosen distance away from whatever that field measures. It lives in the graph and travels with it: `MaterialSDF2D` names its materials as strings, so a mask that keeps trees out of water works in any place that has water.
+
+**`ScatterPoints`**, **`ScatterPointsAroundPoints`** and **`SnapPointsToTerrain`** each take two input ports for it:
+
+| Port | Type | Default | What it is |
+|------|------|---------|------------|
+| **`SDF Mask`** | [SDF Grid 2D](#data-types) | *(nothing wired — nothing masked)* | The field candidates are measured against. |
+| **`Mask Distance`** | [Number](#data-types) | `0` | How far off it they have to be. Wire a [`Number`](#number) node here to set it, or to share one distance between rules. |
+
+**The rule:** each candidate point is sampled in the field at its own `x, z`, and it is **rejected when the sampled distance is less than Mask Distance**. Since a field reads negative on the material it measures, that means:
+
+| Mask Distance | Keeps points |
+|---------------|--------------|
+| `0` | Anywhere off the material |
+| `12` | At least 12 studs clear of it |
+| `-8` | Off it, and up to 8 studs onto it |
+
+**Where in a chain you mask barely matters,** since the field is flat: a candidate is measured by the ground it stands over, whether or not anything has snapped it there yet.
+
+| Masking on | Tests | Worth knowing |
+|------------|-------|---------------|
+| **`ScatterPoints`** | Every candidate the rule starts with | Cheapest: candidates the mask rejects are never raycast by a later snap |
+| **`SnapPointsToTerrain`** | What survived the snap's own material and slope filters | Same answer as masking earlier, over fewer points |
+| **`ScatterPointsAroundPoints`** | The cluster points, not the seeds they grew from | A seed may stand on the masked material and still spread points clear of it |
+
+An empty **`SDF Mask`** port masks nothing, and so does one wired to a node that does not produce a field — that warns and carries on. A field naming a material the place does not have reads as astronomically far away everywhere, so it rejects nothing rather than everything.
+
+Each field is measured once per evaluation however many rules mask against it.
 
 ---
 
@@ -417,12 +528,16 @@ A rule that loses a large fraction of its placements between runs — usually a 
 | `ScatterPoints` | `NodeType`, `Seed`, `Spacing` |
 | `ScatterPointsAroundPoints` | `NodeType`, `Seed`, `InnerRadius`, `OuterRadius`, `Count` |
 | `SnapPointsToTerrain` | `NodeType`, `MaterialFilter`, `SlopeFilter` |
+| `MaterialSDF2D` | `NodeType`, `Materials`, `VoxelSize` |
+| `Number` | `NodeType`, `Value` |
 | `PlaceGeometryOnPoints` | `NodeType`, `GeometryAssetID`, `ScaleRange`, `RotationType`, `ColorRange`, `AvoidIntersections`, `Radius`, `Priority`, `RuleId` |
 | `Output` registry entry | `NodeType` = `OutputNode` |
 | Scatter volume | `Enabled`, `BiomeDefinitionAssetID` |
 | Exclusion volume | *(no attributes; `ObjectValue` children aim it — see [Exclusion volumes](#exclusion-volumes))* |
 | Wire: `Points` | `NodeType` = `Points` |
 | Wire: `Asset` | `NodeType` = `Asset` |
+| Wire: `SDFMask` | `NodeType` = `SDFGrid2D` |
+| Wire: `MaskDistance` | `NodeType` = `Number` |
 
 A **`PlaceGeometryOnPoints`** node added from a rule template also carries
 **`RuleId`** (a `string` GUID), the rule's durable identity for the records that
@@ -445,7 +560,7 @@ lists. Deleting it just returns the node to the automatic column layout.
 |------|------|
 | `src/shared/ScatterGraph/ScatterGraph.client.lua` | Plugin entry; volume grouping, node registry, evaluation loop |
 | `src/shared/ScatterGraph/ScatterGraphHelpers.luau` | Terrain snap, clustering, placement, exclusion zones |
-| `src/shared/ScatterGraph/SDFGrid.luau` | A part's surface measured onto a box of voxels as the distance to it, and how a point is read back out of one. Not yet used by any node |
+| `src/shared/ScatterGraph/SDFGrid2D.luau` | A shape on the ground measured onto a rectangle of cells as the distance to it, from cells already marked off as `MaterialSDF2D` marks them; how a point is read back out of one, and the [grid](#the-distance-field-grid) every field of one evaluation shares |
 | `src/shared/ScatterGraph/RulesWindow.luau` | "Spreadsheet View" dock widget: lists the place's graphs and the chosen graph's outputs, edits the attributes and Asset wire of the nodes feeding each one, and adds or deletes both graphs and rules |
 | `src/shared/ScatterGraph/GraphView.luau` | "Graph View" dock widget: one graph as a canvas of wired nodes that can be added, moved, rewired and deleted, beside the parameters of the selected node |
 | `src/shared/ScatterGraph/Graphs.luau` | Which graphs the place holds, and which one the Studio selection names for the Graph View button to open |

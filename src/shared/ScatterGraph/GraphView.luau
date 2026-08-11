@@ -116,13 +116,16 @@ local ZOOM_WHEEL_STEP = 1.075
 
 -- A title bar is coloured by what its node does, so a chain reads at a glance:
 -- green makes points, teal derives more points from them, brown puts them on the
--- ground, blue places geometry, and grey is the outlet the graph ends at. These
--- are fixed rather than theme colours because they say which node type this is,
--- not which part of the window it is.
+-- ground, olive measures a field over it, violet holds a value the rest read, blue
+-- places geometry, and grey is the outlet the graph ends at. These are fixed rather
+-- than theme colours because they say which node type this is, not which part of
+-- the window it is.
 local TITLE_COLORS = {
 	ScatterPoints = Color3.fromRGB(62, 108, 74),
 	ScatterPointsAroundPoints = Color3.fromRGB(86, 142, 154),
 	SnapPointsToTerrain = Color3.fromRGB(122, 88, 50),
+	MaterialSDF2D = Color3.fromRGB(124, 110, 46),
+	Number = Color3.fromRGB(104, 78, 148),
 	PlaceGeometryOnPoints = Color3.fromRGB(78, 84, 134),
 	Output = Color3.fromRGB(84, 84, 92),
 }
@@ -204,6 +207,18 @@ local NODE_TEMPLATES = {
 		name = "SnapPointsToTerrain",
 		nodeType = "SnapPointsToTerrain",
 		attributes = { MaterialFilter = "Water", SlopeFilter = NumberSequence.new(1, 0) },
+	},
+	{
+		label = "Material SDF 2D",
+		name = "MaterialSDF2D",
+		nodeType = "MaterialSDF2D",
+		attributes = { Materials = "Water", VoxelSize = 4 },
+	},
+	{
+		label = "Number",
+		name = "Number",
+		nodeType = "Number",
+		attributes = { Value = 0 },
 	},
 	{
 		-- Named PlaceAssetOnPoints while its NodeType is PlaceGeometryOnPoints,

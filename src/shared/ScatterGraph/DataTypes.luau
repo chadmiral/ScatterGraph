@@ -9,9 +9,12 @@
 	  nodes pass between themselves.
 	* Instances, the geometry a rule has placed in the world, which is what a
 	  terminal node hands to the Output registry.
-	* An SDF grid, a shape measured onto a box of voxels as the distance to its
-	  surface. Declared and coloured, but nothing produces or reads one yet:
-	  SDFGrid builds them and it is here for the node that will.
+	* A 2D SDF grid, a shape on the ground measured onto a rectangle of cells as
+	  the distance to its edge, seen from above. Material SDF 2D makes one, and
+	  the scattering nodes read one as a mask.
+	* A number, a single value one node settles and another reads -- a mask
+	  distance being the first of them. A number port left unwired stands at its
+	  own default rather than at nothing.
 
 	None of them are interchangeable -- a filter has nothing to say about a
 	placed model, and the Output registry has nothing to place a bare point with
@@ -31,15 +34,17 @@
 
 local DataTypes = {}
 
-export type DataType = "Points" | "Instances" | "SDFGrid"
+export type DataType = "Points" | "Instances" | "SDFGrid2D" | "Number"
 
 local POINTS: DataType = "Points"
 local INSTANCES: DataType = "Instances"
-local SDF_GRID: DataType = "SDFGrid"
+local SDF_GRID_2D: DataType = "SDFGrid2D"
+local NUMBER: DataType = "Number"
 
 DataTypes.POINTS = POINTS
 DataTypes.INSTANCES = INSTANCES
-DataTypes.SDF_GRID = SDF_GRID
+DataTypes.SDF_GRID_2D = SDF_GRID_2D
+DataTypes.NUMBER = NUMBER
 
 -- One slot down the left of a node's card, and the wire dropped on it.
 export type Slot = {
@@ -67,18 +72,37 @@ local PRODUCES: { [string]: DataType } = {
 	ScatterPointsAroundPoints = POINTS,
 	SnapPointsToTerrain = POINTS,
 	PlaceGeometryOnPoints = INSTANCES,
+	MaterialSDF2D = SDF_GRID_2D,
+	Number = NUMBER,
+}
+
+-- The mask every point-producing node takes: a field to measure candidate points
+-- against, and how far from it they have to be. Declared once, since they all read
+-- it the same way and their slots have to be named the same for it.
+local MASK_SLOTS: { Slot } = {
+	{ name = "SDFMask", label = "SDF Mask", dataType = SDF_GRID_2D, wireNodeType = SDF_GRID_2D },
+	{ name = "MaskDistance", label = "Mask Distance", dataType = NUMBER, wireNodeType = NUMBER },
 }
 
 -- What a node reads, by NodeType, in the order the slots are drawn. A node with
--- no entry here reads nothing: ScatterPoints is where a chain starts, and a note
--- is not a working node at all.
+-- no entry here reads nothing: a note is not a working node at all.
 local INPUTS: { [string]: { Slot } } = {
+	-- Where a chain starts, and so the only node here that reads no points.
+	ScatterPoints = {
+		MASK_SLOTS[1],
+		MASK_SLOTS[2],
+	},
+
 	ScatterPointsAroundPoints = {
 		{ name = "Points", dataType = POINTS, wireNodeType = POINTS },
+		MASK_SLOTS[1],
+		MASK_SLOTS[2],
 	},
 
 	SnapPointsToTerrain = {
 		{ name = "Points", dataType = POINTS, wireNodeType = POINTS },
+		MASK_SLOTS[1],
+		MASK_SLOTS[2],
 	},
 
 	PlaceGeometryOnPoints = {
@@ -98,7 +122,8 @@ local INPUTS: { [string]: { Slot } } = {
 local COLORS: { [string]: Color3 } = {
 	Points = Color3.fromRGB(82, 152, 236),
 	Instances = Color3.fromRGB(92, 184, 108),
-	SDFGrid = Color3.fromRGB(226, 192, 68),
+	SDFGrid2D = Color3.fromRGB(226, 192, 68),
+	Number = Color3.fromRGB(176, 138, 220),
 }
 
 -- A port whose type is not known: grey, so it reads as unlabelled rather than
@@ -109,7 +134,8 @@ local UNTYPED = Color3.fromRGB(150, 150, 150)
 local LABELS: { [string]: string } = {
 	Points = "points",
 	Instances = "instances",
-	SDFGrid = "SDF grid",
+	SDFGrid2D = "2D SDF grid",
+	Number = "number",
 }
 
 function DataTypes.color(dataType: DataType?): Color3

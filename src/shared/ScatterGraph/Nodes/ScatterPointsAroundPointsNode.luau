@@ -30,7 +30,12 @@ function ScatterPointsAroundPointsNode:evaluate(volumes, terrain, ctx)
 	end
 
 	points = Helpers.excludePoints(points, ctx.exclusionFunctions)
-	return Helpers.scatterPointsAroundPoints(volumes, terrain, seed, points, count, innerRadius, outerRadius)
+
+	-- The candidates are the cluster points, not the seeds they came from: a seed
+	-- may stand on the masked material and still spread points clear of it.
+	local clustered = Helpers.scatterPointsAroundPoints(volumes, terrain, seed, points, count, innerRadius, outerRadius)
+	local mask, maskDistance = Helpers.readMask(n, volumes, terrain, ctx)
+	return Helpers.maskPoints(clustered, mask, maskDistance)
 end
 
 return ScatterPointsAroundPointsNode

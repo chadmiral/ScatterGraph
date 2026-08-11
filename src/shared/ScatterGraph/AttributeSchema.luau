@@ -129,6 +129,38 @@ local SCHEMA: { [string]: { Descriptor } } = {
 		},
 	},
 
+	Number = {
+		{
+			name = "Value",
+			kind = "number",
+			default = 0,
+			description = "The number this node hands to everything wired to it, such as the Mask Distance "
+				.. "of one or more rules.",
+		},
+	},
+
+	MaterialSDF2D = {
+		{
+			name = "Materials",
+			kind = "string",
+			default = "Water",
+			description = "Comma-separated list of terrain materials to measure from, such as Water,Sand. "
+				.. "The field it outputs holds the distance from every cell of ground to the nearest "
+				.. "ground whose surface is one of them, negative on the material itself.",
+		},
+		{
+			name = "VoxelSize",
+			label = "Voxel Size",
+			kind = "number",
+			optional = true,
+			default = 4,
+			description = "The edge of one cell of the field, in studs. Four is the grid terrain keeps "
+				.. "material on, and so the finest the material itself is known to; smaller sharpens the "
+				.. "distances around it, larger is coarser and cheaper. The volumes being scattered set "
+				.. "what ground the field covers.",
+		},
+	},
+
 	PlaceGeometryOnPoints = {
 		-- The asset placed at each point. The runtime still accepts an in-scene
 		-- template through a child ObjectValue named Asset, but that path is not

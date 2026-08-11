@@ -3,6 +3,7 @@ local CollectionService = game:GetService("CollectionService")
 local VolumeShape = require(script.Parent:WaitForChild("VolumeShape"))
 local PlacementStamp = require(script.Parent:WaitForChild("PlacementStamp"))
 local PlacementLedger = require(script.Parent:WaitForChild("PlacementLedger"))
+local SDFGrid2D = require(script.Parent:WaitForChild("SDFGrid2D"))
 
 local M = {}
 
@@ -442,6 +443,90 @@ function M.excludePoints(points: { Vector3 }, exclusionFunctions: { (Vector3) ->
 	end
 
 	return newPoints
+end
+
+-- The slots a scattering node takes its mask on, named as DataTypes declares
+-- them: the field to measure candidates against, and how far off it they must be.
+local SDF_MASK_WIRE = "SDFMask"
+local MASK_DISTANCE_WIRE = "MaskDistance"
+
+-- What a Mask Distance slot stands at while nothing is wired to it. Zero rejects
+-- a candidate inside the masked shape and nothing else, which is the least a mask
+-- can be asked to do.
+local DEFAULT_MASK_DISTANCE = 0
+
+local function wireNamed(node: Instance, name: string): ObjectValue?
+	for _, child in node:GetChildren() do
+		if child:IsA("ObjectValue") and child.Name == name then
+			return child
+		end
+	end
+
+	return nil
+end
+
+--[[
+	The mask on a node: the field wired to its SDF Mask slot, and the distance
+	wired to its Mask Distance slot or the default in its place.
+
+	Both slots are read here rather than in each node, since both scattering nodes
+	take the same mask and would otherwise say so twice. A slot left empty is not a
+	mistake -- most nodes have no mask at all -- but a slot wired to something that
+	does not produce what it asks for is, and is said once per evaluation.
+]]
+function M.readMask(node: Instance, volumes, terrain, ctx): (SDFGrid2D.Grid?, number)
+	local distance = DEFAULT_MASK_DISTANCE
+
+	local distanceWire = wireNamed(node, MASK_DISTANCE_WIRE)
+	if distanceWire ~= nil and distanceWire.Value ~= nil then
+		local value = ctx.evaluateNode(distanceWire.Value, volumes, terrain, ctx.debugString)
+
+		if typeof(value) == "number" then
+			distance = value
+		else
+			warn(
+				"Node " .. node.Name .. ": its Mask Distance wire points at " .. distanceWire.Value.Name
+					.. ", which does not produce a number, so the mask stands at " .. DEFAULT_MASK_DISTANCE .. "."
+			)
+		end
+	end
+
+	local maskWire = wireNamed(node, SDF_MASK_WIRE)
+	if maskWire == nil or maskWire.Value == nil then
+		return nil, distance
+	end
+
+	local grid = ctx.evaluateNode(maskWire.Value, volumes, terrain, ctx.debugString)
+	if not SDFGrid2D.is(grid) then
+		warn(
+			"Node " .. node.Name .. ": its SDF Mask wire points at " .. maskWire.Value.Name
+				.. ", which does not produce a distance field, so nothing is masked."
+		)
+		return nil, distance
+	end
+
+	return grid, distance
+end
+
+-- Drops every point the mask rejects: one standing nearer the masked shape than
+-- `distance`. On the shape the field reads negative, so any distance at all keeps
+-- points off it, and a negative distance allows them that far in. The field is
+-- flat, so a point is measured by where it stands rather than by how high it is,
+-- and masking before or after a snap comes to the same thing. A node with no field
+-- wired to it masks nothing.
+function M.maskPoints(points: { Vector3 }, mask: SDFGrid2D.Grid?, distance: number): { Vector3 }
+	if mask == nil then
+		return points
+	end
+
+	local kept = {}
+	for _, point in points do
+		if SDFGrid2D.sample(mask, point) >= distance then
+			table.insert(kept, point)
+		end
+	end
+
+	return kept
 end
 
 return M

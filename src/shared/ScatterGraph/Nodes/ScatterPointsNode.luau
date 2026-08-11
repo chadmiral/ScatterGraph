@@ -1,4 +1,5 @@
 local GraphNode = require(script.Parent:WaitForChild("GraphNode"))
+local Helpers = require(script.Parent.Parent:WaitForChild("ScatterGraphHelpers"))
 
 ScatterPointsNode = GraphNode:new()
 ScatterPointsNode.name = "ScatterPointsNode"
@@ -94,7 +95,16 @@ function ScatterPointsNode:evaluate(volumes, terrain, ctx)
             warn("Missing parameters on node "..ctx.node.Name)
         end
     end
-    return scatterPoints(volumes, terrain, seed, spacing)
+    local points = scatterPoints(volumes, terrain, seed, spacing)
+
+    if ctx == nil or ctx.node == nil then
+        return points
+    end
+
+    --the field is flat, so a candidate is measured by the ground it stands over
+    --whether or not anything has snapped it there yet
+    local mask, maskDistance = Helpers.readMask(ctx.node, volumes, terrain, ctx)
+    return Helpers.maskPoints(points, mask, maskDistance)
 end
 
 return ScatterPointsNode

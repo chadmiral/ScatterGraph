@@ -22,7 +22,13 @@ function SnapPointsToTerrainNode:evaluate(volumes, terrain, ctx)
 	end
 
 	points = Helpers.excludePoints(points, ctx.exclusionFunctions)
-	return Helpers.snapPointsToTerrain(volumes, terrain, points, materialFilter, slopeDensityCurve)
+
+	-- Masked after the snap, though the field being flat means it would come to the
+	-- same thing before it: what changes is that the snap has already dropped
+	-- whatever missed the terrain or failed its filters.
+	local snapped = Helpers.snapPointsToTerrain(volumes, terrain, points, materialFilter, slopeDensityCurve)
+	local mask, maskDistance = Helpers.readMask(n, volumes, terrain, ctx)
+	return Helpers.maskPoints(snapped, mask, maskDistance)
 end
 
 return SnapPointsToTerrainNode

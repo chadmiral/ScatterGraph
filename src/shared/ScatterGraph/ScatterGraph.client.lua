@@ -11,6 +11,9 @@ local OutputNode = require(script.Parent.Nodes:WaitForChild("OutputNode"))
 local PlaceGeometryOnPointsNode = require(script.Parent.Nodes:WaitForChild("PlaceGeometryOnPointsNode"))
 local SnapPointsToTerrainNode = require(script.Parent.Nodes:WaitForChild("SnapPointsToTerrainNode"))
 local ScatterPointsAroundPointsNode = require(script.Parent.Nodes:WaitForChild("ScatterPointsAroundPointsNode"))
+local MaterialSDF2DNode = require(script.Parent.Nodes:WaitForChild("MaterialSDF2DNode"))
+local NumberNode = require(script.Parent.Nodes:WaitForChild("NumberNode"))
+local SDFGrid2D = require(script.Parent:WaitForChild("SDFGrid2D"))
 local Helpers = require(script.Parent:WaitForChild("ScatterGraphHelpers"))
 local OccupancyStore = require(script.Parent:WaitForChild("OccupancyStore"))
 local PlacementLedger = require(script.Parent:WaitForChild("PlacementLedger"))
@@ -109,6 +112,8 @@ local nodeRegistry = {
 	SnapPointsToTerrain = SnapPointsToTerrainNode,
 	ScatterPoints = ScatterPointsNode,
 	ScatterPointsAroundPoints = ScatterPointsAroundPointsNode,
+	MaterialSDF2D = MaterialSDF2DNode,
+	Number = NumberNode,
 }
 
 local evaluateNode
@@ -131,6 +136,18 @@ local currentExclusionZones = {}
 -- rule this is, and read by every node in that chain: a volume aimed at a rule
 -- excludes the whole of it, not only its terminal. Reset in evaluateGraph.
 local currentExclusionFunctions = {}
+-- The grid every distance field in this graph is measured over, set from the
+-- volumes being scattered before any node runs and handed to all of them. A node
+-- measuring a field does not choose its own: two fields are read against each
+-- other only if they line up voxel for voxel, and the ground being scattered is
+-- what the resolution should answer to in the first place. Set in evaluateGraph.
+local currentGridLayout = nil
+-- The distance fields measured so far in this graph, by the node that measured
+-- them. A field costs the best part of a second over a biome, and every rule that
+-- masks against one asks the same node for it again: the answer depends on the
+-- node's own parameters and the volumes, neither of which move during a run.
+-- Reset in evaluateGraph, since the grid it is measured over is.
+local currentFieldCache = {}
 
 -- `rule` is the Output entry that names the chain being evaluated. Only the
 -- Output node passes it -- it is the only node that knows -- so a call from
@@ -167,6 +184,8 @@ evaluateNode = function(n, volumes, terrain, debugString, rule)
 			evaluateNode = evaluateNode,
 			debugString = debugString,
 			exclusionFunctions = currentExclusionFunctions,
+			gridLayout = currentGridLayout,
+			fieldCache = currentFieldCache,
 			instanceFolder = InstanceFolder,
 			insertService = InsertService,
 			occupancy = currentOccupancy,
@@ -185,6 +204,10 @@ local function evaluateGraph(g, volumes, terrain, graphKey)
 	-- Nothing outside a rule is excluded from anything; the Output node below
 	-- fills this in as it reaches each rule.
 	currentExclusionFunctions = {}
+	-- Settled from the volumes before the first Output node is reached, so every
+	-- field measured anywhere in this graph covers the same ground.
+	currentGridLayout = SDFGrid2D.layoutFor(volumes)
+	currentFieldCache = {}
 	currentOccupancy = OccupancyStore.new()
 	currentOccupancy.run = currentRun
 	currentOccupancy.graphKey = graphKey
