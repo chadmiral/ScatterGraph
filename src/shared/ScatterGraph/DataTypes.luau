@@ -24,6 +24,12 @@
 	-- so a port says which of them it is, in the one colour that means that
 	everywhere it is drawn.
 
+	Reroute is the exception, and the reason a type is worked out here rather
+	than looked up: it carries whichever of them is wired into it, so what it
+	produces has to be followed back up its own wire -- through any number of
+	further reroutes -- rather than read off its node type. Until something is
+	wired to one it carries nothing, which is what lets it take anything.
+
 	This is also where a node's ports themselves are declared: which slots it
 	reads, in the order they are drawn down the left of its card, and what each
 	one takes. The view builds its ports from these and the runtime reads the
@@ -58,20 +64,32 @@ export type Slot = {
 	name: string?,
 	-- What the canvas writes beside the port, where the wire's name reads poorly.
 	label: string?,
-	dataType: DataType,
+	-- What the slot takes, or nil for a slot that takes anything: a Reroute's,
+	-- before it carries something and so before it is anything in particular.
+	dataType: DataType?,
 	-- The NodeType stamped on the wire. Usually the data type it carries, but the
 	-- Output registry's entries were named for the node they point at before any
 	-- of this was typed, and every graph in existence still has them that way.
-	wireNodeType: string,
+	-- Nil where the slot takes anything, and the wire is stamped with whatever
+	-- turned out to be wired to it.
+	wireNodeType: string?,
 	-- One slot per wire already there, plus an empty one to add another, rather
 	-- than the single slot a named entry describes.
 	repeated: boolean?,
 }
 
+-- The node that carries whatever is wired into it, and the slot it does that on.
+-- Named here because working out what one is carrying means finding that wire.
+local REROUTE = "Reroute"
+local REROUTE_INPUT = "Input"
+
+DataTypes.REROUTE_INPUT = REROUTE_INPUT
+
 -- What a node hands downstream, by NodeType. The scattering and filtering nodes
 -- make points; the terminal node turns them into geometry, and so passes
 -- instances on to the Output registry. Output produces nothing -- it is where
--- the graph ends -- and so has no port to colour.
+-- the graph ends -- and so has no port to colour, and Reroute produces whatever
+-- reaches it rather than anything of its own.
 local PRODUCES: { [string]: DataType } = {
 	ScatterPoints = POINTS,
 	ScatterPointsAroundPoints = POINTS,
@@ -165,16 +183,68 @@ local function nodeTypeOf(node: Instance): string?
 	return if typeof(nodeType) == "string" then nodeType else nil
 end
 
--- What comes out of this node's right-hand port, or nil if it has none.
-function DataTypes.producedBy(node: Instance): DataType?
+-- What the given node's input wire points at, or nil where that slot is empty.
+local function wiredTo(node: Instance, name: string): Instance?
+	for _, child in node:GetChildren() do
+		if child:IsA("ObjectValue") and child.Name == name then
+			return child.Value
+		end
+	end
+
+	return nil
+end
+
+--[[
+	What comes out of a node, following a Reroute back up its wire to whatever
+	actually produced the thing it is passing on.
+
+	`seen` is the reroutes already walked through. A graph can only be wired into a
+	loop by hand -- the canvas refuses to draw one -- but a loop reached from here
+	would hang the window that is the means of unpicking it, so a reroute already
+	visited is treated as carrying nothing rather than followed round again.
+]]
+local function producedWith(node: Instance, seen: { [Instance]: boolean }): DataType?
 	local nodeType = nodeTypeOf(node)
-	return if nodeType ~= nil then PRODUCES[nodeType] else nil
+
+	if nodeType == nil then
+		return nil
+	end
+
+	if nodeType == REROUTE then
+		if seen[node] then
+			return nil
+		end
+
+		seen[node] = true
+
+		local upstream = wiredTo(node, REROUTE_INPUT)
+		return if upstream ~= nil then producedWith(upstream, seen) else nil
+	end
+
+	return PRODUCES[nodeType]
+end
+
+-- What comes out of this node's right-hand port, or nil if it has none -- which
+-- is also a Reroute with nothing wired into it yet.
+function DataTypes.producedBy(node: Instance): DataType?
+	return producedWith(node, {})
 end
 
 -- The slots down the left of this node, in order. Empty for a node that reads
 -- nothing, and for one this module has never heard of.
 function DataTypes.inputsOf(node: Instance): { Slot }
 	local nodeType = nodeTypeOf(node)
+
+	if nodeType == REROUTE then
+		-- Its one slot is whatever it is carrying: untyped while it carries
+		-- nothing, so anything may be dropped on it, and that type from then on,
+		-- so what it feeds cannot be pulled out from under by re-aiming it at
+		-- another kind of thing. Built here rather than declared, since the answer
+		-- is different every time it is asked.
+		local carried = DataTypes.producedBy(node)
+		return { { name = REROUTE_INPUT, dataType = carried, wireNodeType = carried } }
+	end
+
 	return (if nodeType ~= nil then INPUTS[nodeType] else nil) or {}
 end
 

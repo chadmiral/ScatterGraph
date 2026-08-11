@@ -25,6 +25,14 @@
 	a menu -- the whole rules the Spreadsheet view offers, and the single nodes to
 	build a chain by hand -- and adds the one chosen where the menu was opened.
 
+	A reroute is drawn as a dot the size of a port rather than as a card, since a
+	bend in a wire should look like one and it has nothing else to show. Its ends
+	are the same point, so the wire in and the wire out meet there. Dragging the dot
+	moves it; pointing at it grows the output port a card would have on its edge,
+	which is what a wire is then pulled out of. That gesture is geometry rather than
+	a held key because the keyboard reaches this window through a focused text box
+	(see grabKeyboard), which never reports a modifier being held.
+
 	More than one node can be picked, so everything that acts on a selection acts
 	on all of it: the panel shows each picked node under its own heading, a drag
 	carries the whole handful at once, and Delete Node deletes all of them as a
@@ -98,6 +106,12 @@ local PORT_RING = 2
 local PORT_HIT = 14
 local WIRE_THICKNESS = 2
 local BREAK_SIZE = 10
+-- A reroute is drawn as one dot rather than a card. It holds no parameters and
+-- does nothing to what passes through it, so a card's worth of canvas would say
+-- nothing the dot does not, and a wire bent around the graph should look like a
+-- bent wire. Twice a port, because unlike a port it is also the handle the thing
+-- is dragged by, and a round number of grid snaps so it lands on the grid square.
+local REROUTE_SIZE = 20
 local COLUMN_GAP = 72
 local ROW_GAP = 24
 local MARGIN = 40
@@ -119,8 +133,9 @@ local ZOOM_WHEEL_STEP = 1.075
 -- ground, olive measures a field over it, rust turns something into a texture that
 -- thins a scatter out, violet holds a value the rest read, blue places geometry,
 -- and grey is the outlet the graph ends at. These are fixed rather than theme
--- colours because they say which node type this is, not which part of the window it
--- is.
+-- colours because they say which node type this is, not which part of the window
+-- it is. A reroute is not here: it has no title to colour, being drawn as a dot in
+-- the colour of whatever it is carrying.
 local TITLE_COLORS = {
 	ScatterPoints = Color3.fromRGB(62, 108, 74),
 	ScatterPointsAroundPoints = Color3.fromRGB(86, 142, 154),
@@ -244,6 +259,15 @@ local NODE_TEMPLATES = {
 		attributes = { ScaleRange = Vector2.new(0.9, 1.1), RotationType = "UpAxis" },
 	},
 	{
+		-- A bend in a wire, for the canvas rather than the evaluation: it hands
+		-- on whatever reaches it, and takes the type of that when something does.
+		-- Drawn as a dot rather than a card, since that is all it is.
+		label = "Reroute",
+		name = "Reroute",
+		nodeType = "Reroute",
+		attributes = {},
+	},
+	{
 		-- Not a working node: a post-it to write on. The runtime never sees it,
 		-- since nothing wires to it. Text is the note itself.
 		label = "Note",
@@ -267,6 +291,12 @@ end
 -- editable note instead of a strip of parameters.
 local function isNote(node: Instance): boolean
 	return node:GetAttribute("NodeType") == "Note"
+end
+
+-- A bend in a wire rather than a step in the work: drawn as a dot the size of a
+-- port, where the wire in and the wire out meet at the same point.
+local function isReroute(node: Instance): boolean
+	return node:GetAttribute("NodeType") == "Reroute"
 end
 
 local function snapToGrid(point: Vector2): Vector2
@@ -710,21 +740,45 @@ local function create(pluginRef: Plugin)
 		return TITLE_HEIGHT + PORT_ROW + (if ruleOf(node) ~= nil then PORT_ROW else 0)
 	end
 
+	local function nodeWidth(node: Instance): number
+		return if isReroute(node) then REROUTE_SIZE else NODE_WIDTH
+	end
+
 	local function nodeHeight(node: Instance): number
 		if isNote(node) then
 			return NOTE_HEIGHT
+		end
+
+		if isReroute(node) then
+			return REROUTE_SIZE
 		end
 
 		local ports = inputs[node]
 		return headerHeight(node) + (if ports ~= nil then #ports else 0) * PORT_ROW
 	end
 
+	-- Both ends of a reroute are the dot itself: the wire arriving and the wire
+	-- leaving meet at one point, which is what makes it read as a bend in a wire
+	-- rather than as a node with a near side and a far side.
+	local function rerouteCenter(node: Instance): Vector2
+		local origin = positions[node] or Vector2.zero
+		return origin + Vector2.new(REROUTE_SIZE / 2, REROUTE_SIZE / 2)
+	end
+
 	local function outputPortCenter(node: Instance): Vector2
+		if isReroute(node) then
+			return rerouteCenter(node)
+		end
+
 		local origin = positions[node] or Vector2.zero
 		return origin + Vector2.new(NODE_WIDTH, TITLE_HEIGHT + PORT_ROW / 2)
 	end
 
 	local function inputPortCenter(node: Instance, index: number): Vector2
+		if isReroute(node) then
+			return rerouteCenter(node)
+		end
+
 		local origin = positions[node] or Vector2.zero
 		return origin + Vector2.new(0, headerHeight(node) + (index - 0.5) * PORT_ROW)
 	end
@@ -980,17 +1034,26 @@ local function create(pluginRef: Plugin)
 		for node, card in cards do
 			local isSelected = selection[node] == true
 
-			-- A red border marks a node that cannot run, and it wins over the
+			-- A red edge marks a node that cannot run, and it wins over the
 			-- selection colour so the error stays visible while the node is
 			-- picked -- the strip lift below still shows that it is selected.
+			local edge, weight
 			if card.invalid then
-				card.frame.BorderColor3 = ERROR_COLOR
-				card.frame.BorderSizePixel = 2
+				edge, weight = ERROR_COLOR, 2
+			elseif isSelected then
+				edge, weight = color(Enum.StudioStyleGuideColor.LinkText), 2
 			else
-				card.frame.BorderColor3 = if isSelected
-					then color(Enum.StudioStyleGuideColor.LinkText)
-					else NODE_BORDER
-				card.frame.BorderSizePixel = if isSelected then 2 else 1
+				edge, weight = NODE_BORDER, 1
+			end
+
+			-- A round card is edged with a stroke rather than a border, a border
+			-- being drawn square whatever the corner radius says.
+			if card.stroke ~= nil then
+				card.stroke.Color = edge
+				card.stroke.Thickness = weight
+			else
+				card.frame.BorderColor3 = edge
+				card.frame.BorderSizePixel = weight
 			end
 			-- Selection lightens the type colour rather than replacing it, so a
 			-- selected node still says what it is.
@@ -1172,6 +1235,11 @@ local function create(pluginRef: Plugin)
 
 		local slot = port.slot
 
+		-- What the wire is stamped with. A slot that takes anything says nothing
+		-- about it, so the stamp is what turned out to be wired to it: a reroute's
+		-- wire reads as the kind of thing it is carrying.
+		local stamp = slot.wireNodeType or produced
+
 		recorded("Connect " .. source.Name .. " to " .. target.Name, function()
 			pinPositions()
 
@@ -1180,7 +1248,7 @@ local function create(pluginRef: Plugin)
 			if port.isNew then
 				local entry = Instance.new("ObjectValue")
 				entry.Name = uniqueChildName(target, source.Name)
-				entry:SetAttribute("NodeType", slot.wireNodeType)
+				entry:SetAttribute("NodeType", stamp)
 				entry.Value = source
 				entry.Parent = target
 				return
@@ -1191,8 +1259,14 @@ local function create(pluginRef: Plugin)
 			if wire == nil then
 				wire = Instance.new("ObjectValue")
 				wire.Name = slot.name
-				wire:SetAttribute("NodeType", slot.wireNodeType)
 				wire.Parent = target
+			end
+
+			-- Restamped rather than stamped only when new, since a reroute
+			-- emptied and then aimed at another kind of thing is carrying
+			-- something else now.
+			if stamp ~= nil then
+				wire:SetAttribute("NodeType", stamp)
 			end
 
 			wire.Value = source
@@ -1239,7 +1313,7 @@ local function create(pluginRef: Plugin)
 
 			if origin ~= nil and #ports > 0 then
 				local within = point.X >= origin.X
-					and point.X <= origin.X + NODE_WIDTH
+					and point.X <= origin.X + nodeWidth(node)
 					and point.Y >= origin.Y
 					and point.Y <= origin.Y + nodeHeight(node)
 
@@ -1280,7 +1354,7 @@ local function create(pluginRef: Plugin)
 			local origin = positions[node]
 
 			if origin ~= nil then
-				local corner = origin + Vector2.new(NODE_WIDTH, nodeHeight(node))
+				local corner = origin + Vector2.new(nodeWidth(node), nodeHeight(node))
 				local overlaps = origin.X <= high.X
 					and corner.X >= low.X
 					and origin.Y <= high.Y
@@ -1359,7 +1433,11 @@ local function create(pluginRef: Plugin)
 			applySelection()
 		elseif finished.kind == "wire" then
 			local target, port = portAt(finished.point or Vector2.zero, DataTypes.producedBy(finished.node))
-			if target ~= nil and port ~= nil and finished.node.Parent ~= nil then
+			-- A wire dropped back on the node it came from is a gesture given up
+			-- on rather than a mistake worth saying anything about -- and on a
+			-- reroute, where the wire leaves from the same point its own slot sits
+			-- at, letting go without moving is exactly that.
+			if target ~= nil and port ~= nil and target ~= finished.node and finished.node.Parent ~= nil then
 				connect(finished.node, target, port)
 			end
 		end
@@ -1750,9 +1828,150 @@ local function create(pluginRef: Plugin)
 		overlay.watchForTooltip(strip, "Drag to move this note. Click the body to write in it.")
 	end
 
+	-- A reroute as a dot: no title, no parameter rows, and no pair of ports on
+	-- opposite edges, since all three would be a card's worth of canvas spent
+	-- saying that a wire goes through here. It is drawn like the ports it stands
+	-- between -- the colour of what it carries, solid once something is wired into
+	-- it and a ring while nothing is -- so an empty one reads as an empty port
+	-- rather than needing a badge to say the same thing.
+	local function makeRerouteCard(node: Instance)
+		local origin = positions[node] or Vector2.zero
+		local carried = DataTypes.producedBy(node)
+		local port = (inputs[node] or {})[1]
+		local filled = port ~= nil and port.wire ~= nil and port.wire.Value ~= nil
+		local tint = DataTypes.color(carried)
+
+		local dot = Instance.new("TextButton")
+		dot.Position = UDim2.fromOffset(origin.X, origin.Y)
+		dot.Size = UDim2.fromOffset(REROUTE_SIZE, REROUTE_SIZE)
+		dot.BackgroundColor3 = tint
+		dot.BorderSizePixel = 0
+		dot.Text = ""
+		dot.AutoButtonColor = false
+		dot.Parent = nodeLayer
+
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(1, 0)
+		corner.Parent = dot
+
+		-- A stroke rather than the border every card is edged with, since a border
+		-- is drawn square whatever the corner radius says and this one is a circle.
+		-- Border mode rather than the contextual default, which on a button means
+		-- the text it does not have.
+		local stroke = Instance.new("UIStroke")
+		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+		stroke.Color = NODE_BORDER
+		stroke.Thickness = 1
+		stroke.Parent = dot
+
+		-- The hole in an empty reroute. Its ring is the same share of the dot as a
+		-- port's is of a port, so the two read as the same thing at their two
+		-- sizes. It takes no input of its own, so a press in the middle of the dot
+		-- still reaches the dot.
+		if not filled then
+			local ring = PORT_RING * REROUTE_SIZE / PORT_SIZE
+
+			local hole = Instance.new("Frame")
+			hole.AnchorPoint = Vector2.new(0.5, 0.5)
+			hole.Position = UDim2.fromScale(0.5, 0.5)
+			hole.Size = UDim2.fromOffset(REROUTE_SIZE - ring * 2, REROUTE_SIZE - ring * 2)
+			hole.BackgroundColor3 = color(Enum.StudioStyleGuideColor.InputFieldBackground)
+			hole.BorderSizePixel = 0
+			hole.Parent = dot
+
+			local holeCorner = Instance.new("UICorner")
+			holeCorner.CornerRadius = UDim.new(1, 0)
+			holeCorner.Parent = hole
+		end
+
+		-- The dot stands in for the strip a card is selected by, so picking one
+		-- lightens the type colour the way picking a card lightens its title.
+		cards[node] = { frame = dot, strip = dot, stroke = stroke, tint = tint, invalid = false }
+
+		-- What a wire is pulled out of. A card keeps its two gestures apart by
+		-- geometry -- the body is dragged to move it, the port on its edge to wire
+		-- it -- and a dot has no room for both, so it grows one: an ordinary output
+		-- port on its right edge, shown while the pointer is on it and gone again
+		-- afterwards, which leaves a reroute a bare dot to look at and a node with
+		-- a port to work. Geometry rather than a held key because this window's
+		-- keyboard arrives through a focused text box rather than through key
+		-- events (see grabKeyboard), and a modifier held on macOS never reaches it.
+		local nub = makePort(dot, Vector2.new(REROUTE_SIZE, REROUTE_SIZE / 2), true, carried)
+		nub.Visible = false
+
+		overlay.watchForTooltip(
+			nub,
+			"The "
+				.. DataTypes.label(carried)
+				.. " this reroute carries. Drag from here onto another node to feed it."
+		)
+
+		-- Tracked on both, because the port hangs half outside the dot: the pointer
+		-- reaching it can leave the dot, and hiding the port then would take it out
+		-- from under the pointer on its way to it.
+		local onDot, onNub = false, false
+		local function showNub()
+			nub.Visible = onDot or onNub
+		end
+
+		dot.MouseEnter:Connect(function()
+			onDot = true
+			showNub()
+		end)
+		dot.MouseLeave:Connect(function()
+			onDot = false
+			showNub()
+		end)
+
+		nub.MouseEnter:Connect(function()
+			onNub = true
+			showNub()
+		end)
+		nub.MouseLeave:Connect(function()
+			onNub = false
+			showNub()
+		end)
+
+		nub.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 then
+				selectOnly(node)
+				beginWireDrag(node)
+			end
+		end)
+
+		dot.InputBegan:Connect(function(input)
+			if input.UserInputType ~= Enum.UserInputType.MouseButton1 then
+				return
+			end
+
+			grabKeyboard()
+			pickForDrag(node)
+
+			if selection[node] then
+				beginNodeDrag(node, input)
+			end
+		end)
+
+		carryDrag(dot)
+
+		overlay.watchForTooltip(
+			dot,
+			node.Name
+				.. ": a reroute carrying "
+				.. (if carried ~= nil then DataTypes.label(carried) else "nothing yet")
+				.. ".\nDrag to move it. Drag from the port on its right to wire it into another node."
+				.. "\nDrop a wire on it to change what it carries."
+		)
+	end
+
 	local function makeCard(node: Instance)
 		if isNote(node) then
 			makeNoteCard(node)
+			return
+		end
+
+		if isReroute(node) then
+			makeRerouteCard(node)
 			return
 		end
 
@@ -2068,7 +2287,7 @@ local function create(pluginRef: Plugin)
 		-- the size of the last one.
 		for node, position in positions do
 			if only == nil or only[node] then
-				local far = position + Vector2.new(NODE_WIDTH, nodeHeight(node))
+				local far = position + Vector2.new(nodeWidth(node), nodeHeight(node))
 				low = if low == nil
 					then position
 					else Vector2.new(math.min(low.X, position.X), math.min(low.Y, position.Y))

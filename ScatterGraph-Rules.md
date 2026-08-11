@@ -28,6 +28,7 @@ This document describes every node type, attribute, wire, tag, and volume settin
 | `SDFThreshold2D` | Cuts a distance field at a distance, giving a density texture that is white beyond it and black within |
 | `NoiseTexture2D` | Fills a density texture with Perlin noise, to break a scatter up in soft patches |
 | `Number` | Holds one number for other nodes to read |
+| `Reroute` | Hands on whatever is wired into it, so a wire can be routed around the canvas |
 | `PlaceGeometryOnPoints` | Clones and places asset geometry at each point |
 
 The biome root model uses **`NodeType`** = **`ScatterGraph`**. It is a container only and is not evaluated directly.
@@ -89,6 +90,8 @@ A wire between two nodes carries one of these kinds of thing, and each end of it
 | **Number** | A single value | `Number` | `SDFThreshold2D` | Violet |
 
 A **Number** port left unwired stands at its own default rather than at nothing, so wiring one is a way to make several nodes agree on a value, not a requirement.
+
+[`Reroute`](#reroute) is not in that table because it has no type of its own: it produces whatever is wired into it, and the dot it is drawn as takes that type's colour once something is.
 
 The Graph View draws every port in its type's colour — filled when something is wired to it, a ring of the same colour when nothing is — so what a wire may join reads off the canvas. A wire dropped on a slot that takes another type is refused with a warning, and one dropped on the body of a node goes to whichever of its slots takes what is being dragged. A node type the plugin does not recognise has no type, is drawn grey, and has no slots.
 
@@ -354,6 +357,35 @@ Source node. Holds one number and hands it to everything wired to it. There is n
 
 ---
 
+### Reroute
+
+A bend in a wire. It reads one thing and hands that same thing on, and it exists for the canvas rather than the evaluation: a field or a texture shared by a dozen rules otherwise reaches them as a dozen wires drawn straight across everything between, and a reroute or two lets those run where you put them.
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **`NodeType`** | `string` | Yes | **`Reroute`** |
+
+Nothing to set: what it passes on is whatever is wired into it.
+
+| Wire | Required | Description |
+|------|----------|-------------|
+| **`Input`** | Yes | The node whose output this one hands on. Nothing wired means nothing to pass on, and it warns. |
+
+**Output:** whatever reached it, of whatever type — so a reroute takes the colour of what it is carrying.
+
+**On the canvas it is a dot, not a card.** A reroute is drawn the size of a port, in the colour of what it carries: solid once something is wired into it and a ring around a hole while nothing is, which is how an empty port looks and how you can tell an unwired one at a glance. Both of its ends are that one point, so the wire arriving and the wires leaving meet there and the pair reads as a single bent wire. A card keeps its two gestures apart by geometry — the body is dragged to move it, the port on its edge to wire it — and a dot has no room for both, so it grows one: **drag the dot to move it, and point at it to bring up an output port on its right edge, which is what you drag from to wire it into another node.** The port goes away again when you point elsewhere, so a reroute at rest is just a dot. A wire is dropped onto it the same way as onto any other node. There is nowhere on a dot to print a name, so hovering one names it and says what it is carrying.
+
+**It has no type until it carries one.** An empty reroute is grey and accepts anything; from the moment something is wired in, it reads as that type and a wire of another type is turned down like any other mismatch. To re-aim one at a different kind of thing, break its input wire first — and check what it feeds still makes sense, since those wires were drawn when it carried something else.
+
+**It changes nothing about the evaluation.** A chain with reroutes in it produces exactly what the same chain without them would, point for point:
+
+- Reroutes chain, so a wire may bend as many times as the layout needs.
+- The rule a placement is recorded under travels through one, so a reroute may stand between a terminal node and the [Output registry](#output-registry) without costing that rule its identity. The registry entry keeps its own name either way, and that name is still what identifies the rule.
+- It is deliberately not cached. A wire read by two nodes evaluates what is behind it twice, and a reroute that only did it once would be a reroute that changed the answer.
+- A reroute wired into a loop by hand hangs an evaluation exactly as any other loop does. The canvas refuses to draw one, and the windows themselves are loop-safe, so a graph in that state can still be opened and unpicked.
+
+---
+
 ### PlaceGeometryOnPoints
 
 Terminal node. Clones a template model at each input point, applies scale, optional color tint, and rotation, and parents instances to `Workspace.ScatterGraphInstances`.
@@ -593,6 +625,7 @@ A rule that loses a large fraction of its placements between runs — usually a 
 | `SDFThreshold2D` | `NodeType` *(both parameters are wires)* |
 | `NoiseTexture2D` | `NodeType`, `Scale`, `Phase`, `VoxelSize` |
 | `Number` | `NodeType`, `Value` |
+| `Reroute` | `NodeType` *(its one input is a wire)* |
 | `PlaceGeometryOnPoints` | `NodeType`, `GeometryAssetID`, `ScaleRange`, `RotationType`, `ColorRange`, `AvoidIntersections`, `Radius`, `Priority`, `RuleId` |
 | `Output` registry entry | `NodeType` = `OutputNode` |
 | Scatter volume | `Enabled`, `BiomeDefinitionAssetID` |
@@ -600,6 +633,7 @@ A rule that loses a large fraction of its placements between runs — usually a 
 | Wire: `Points` | `NodeType` = `Points` |
 | Wire: `Asset` | `NodeType` = `Asset` |
 | Wire: `Density` | `NodeType` = `Texture2D` |
+| Wire: `Input` | `NodeType` = whatever the [reroute](#reroute) carries |
 | Wire: `SDF` | `NodeType` = `SDFGrid2D` |
 | Wire: `Distance` | `NodeType` = `Number` |
 

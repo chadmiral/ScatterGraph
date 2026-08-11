@@ -194,6 +194,9 @@ local SCHEMA: { [string]: { Descriptor } } = {
 	-- Both of its parameters arrive over wires, so it has none of its own.
 	SDFThreshold2D = {},
 
+	-- Nothing to set: what a reroute passes on is whatever is wired into it.
+	Reroute = {},
+
 	PlaceGeometryOnPoints = {
 		-- The asset placed at each point. The runtime still accepts an in-scene
 		-- template through a child ObjectValue named Asset, but that path is not

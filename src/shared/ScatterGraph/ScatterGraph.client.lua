@@ -15,6 +15,7 @@ local MaterialSDF2DNode = require(script.Parent.Nodes:WaitForChild("MaterialSDF2
 local SDFThreshold2DNode = require(script.Parent.Nodes:WaitForChild("SDFThreshold2DNode"))
 local NoiseTexture2DNode = require(script.Parent.Nodes:WaitForChild("NoiseTexture2DNode"))
 local NumberNode = require(script.Parent.Nodes:WaitForChild("NumberNode"))
+local RerouteNode = require(script.Parent.Nodes:WaitForChild("RerouteNode"))
 local GridLayout2D = require(script.Parent:WaitForChild("GridLayout2D"))
 local Helpers = require(script.Parent:WaitForChild("ScatterGraphHelpers"))
 local OccupancyStore = require(script.Parent:WaitForChild("OccupancyStore"))
@@ -118,6 +119,7 @@ local nodeRegistry = {
 	SDFThreshold2D = SDFThreshold2DNode,
 	NoiseTexture2D = NoiseTexture2DNode,
 	Number = NumberNode,
+	Reroute = RerouteNode,
 }
 
 local evaluateNode
@@ -188,6 +190,10 @@ evaluateNode = function(n, volumes, terrain, debugString, rule)
 			evaluateNode = evaluateNode,
 			debugString = debugString,
 			exclusionFunctions = currentExclusionFunctions,
+			-- Only a pass-through node has any use for this: the entry itself,
+			-- so that it can hand the rule's identity on to the node it is
+			-- standing in front of rather than swallowing it.
+			rule = rule,
 			gridLayout = currentGridLayout,
 			fieldCache = currentFieldCache,
 			instanceFolder = InstanceFolder,
