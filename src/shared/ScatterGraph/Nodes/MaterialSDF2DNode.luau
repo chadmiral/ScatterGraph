@@ -25,6 +25,7 @@
 ]]
 
 local GraphNode = require(script.Parent:WaitForChild("GraphNode"))
+local GridLayout2D = require(script.Parent.Parent:WaitForChild("GridLayout2D"))
 local SDFGrid2D = require(script.Parent.Parent:WaitForChild("SDFGrid2D"))
 
 local MaterialSDF2DNode = GraphNode:new()
@@ -32,7 +33,7 @@ MaterialSDF2DNode.name = "MaterialSDF2DNode"
 MaterialSDF2DNode._type = "MaterialSDF2DNode"
 
 -- The grid terrain is stored on and reads back at.
-local TERRAIN_VOXEL = SDFGrid2D.TERRAIN_VOXEL
+local TERRAIN_VOXEL = GridLayout2D.TERRAIN_VOXEL
 
 -- How much terrain one read takes, per axis. Terrain refuses a region of some
 -- millions of voxels, and a 256 stud cube is 262144 of them: comfortably inside
@@ -133,7 +134,7 @@ end
 local function markSurface(
 	terrain: Terrain,
 	wanted: { [Enum.Material]: boolean },
-	layout: SDFGrid2D.Layout,
+	layout: GridLayout2D.Layout,
 	top: number,
 	bottom: number
 ): { boolean }
@@ -141,7 +142,7 @@ local function markSurface(
 	local countX, countZ = layout.resolution.X, layout.resolution.Y
 	local marked = {}
 
-	local low = SDFGrid2D.corner(layout)
+	local low = GridLayout2D.corner(layout)
 	local high = low + Vector2.new(countX * voxelSize, countZ * voxelSize)
 
 	-- A patch need not line up with the field's cells, whatever size those are:
@@ -254,7 +255,7 @@ function MaterialSDF2DNode:evaluate(volumes, terrain, ctx)
 	local voxelSize = voxelSizeOf(n)
 	local layout = ctx.gridLayout
 	if layout == nil or layout.voxelSize ~= voxelSize then
-		layout = SDFGrid2D.layoutFor(volumes, voxelSize)
+		layout = GridLayout2D.layoutFor(volumes, voxelSize)
 	end
 
 	-- The height to look down from, and how far: the same span the snap casts its

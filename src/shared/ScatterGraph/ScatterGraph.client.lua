@@ -12,8 +12,10 @@ local PlaceGeometryOnPointsNode = require(script.Parent.Nodes:WaitForChild("Plac
 local SnapPointsToTerrainNode = require(script.Parent.Nodes:WaitForChild("SnapPointsToTerrainNode"))
 local ScatterPointsAroundPointsNode = require(script.Parent.Nodes:WaitForChild("ScatterPointsAroundPointsNode"))
 local MaterialSDF2DNode = require(script.Parent.Nodes:WaitForChild("MaterialSDF2DNode"))
+local SDFThreshold2DNode = require(script.Parent.Nodes:WaitForChild("SDFThreshold2DNode"))
+local NoiseTexture2DNode = require(script.Parent.Nodes:WaitForChild("NoiseTexture2DNode"))
 local NumberNode = require(script.Parent.Nodes:WaitForChild("NumberNode"))
-local SDFGrid2D = require(script.Parent:WaitForChild("SDFGrid2D"))
+local GridLayout2D = require(script.Parent:WaitForChild("GridLayout2D"))
 local Helpers = require(script.Parent:WaitForChild("ScatterGraphHelpers"))
 local OccupancyStore = require(script.Parent:WaitForChild("OccupancyStore"))
 local PlacementLedger = require(script.Parent:WaitForChild("PlacementLedger"))
@@ -113,6 +115,8 @@ local nodeRegistry = {
 	ScatterPoints = ScatterPointsNode,
 	ScatterPointsAroundPoints = ScatterPointsAroundPointsNode,
 	MaterialSDF2D = MaterialSDF2DNode,
+	SDFThreshold2D = SDFThreshold2DNode,
+	NoiseTexture2D = NoiseTexture2DNode,
 	Number = NumberNode,
 }
 
@@ -205,8 +209,8 @@ local function evaluateGraph(g, volumes, terrain, graphKey)
 	-- fills this in as it reaches each rule.
 	currentExclusionFunctions = {}
 	-- Settled from the volumes before the first Output node is reached, so every
-	-- field measured anywhere in this graph covers the same ground.
-	currentGridLayout = SDFGrid2D.layoutFor(volumes)
+	-- field and texture made anywhere in this graph covers the same ground.
+	currentGridLayout = GridLayout2D.layoutFor(volumes)
 	currentFieldCache = {}
 	currentOccupancy = OccupancyStore.new()
 	currentOccupancy.run = currentRun

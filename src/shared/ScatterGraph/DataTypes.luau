@@ -11,8 +11,11 @@
 	  terminal node hands to the Output registry.
 	* A 2D SDF grid, a shape on the ground measured onto a rectangle of cells as
 	  the distance to its edge, seen from above. Material SDF 2D makes one, and
-	  the scattering nodes read one as a mask.
-	* A number, a single value one node settles and another reads -- a mask
+	  SDF Threshold cuts one into a texture.
+	* A 2D texture, a greyscale image laid over the ground. The scattering nodes
+	  read one as a density: the chance a candidate point survives where it
+	  stands.
+	* A number, a single value one node settles and another reads -- a threshold
 	  distance being the first of them. A number port left unwired stands at its
 	  own default rather than at nothing.
 
@@ -34,16 +37,18 @@
 
 local DataTypes = {}
 
-export type DataType = "Points" | "Instances" | "SDFGrid2D" | "Number"
+export type DataType = "Points" | "Instances" | "SDFGrid2D" | "Texture2D" | "Number"
 
 local POINTS: DataType = "Points"
 local INSTANCES: DataType = "Instances"
 local SDF_GRID_2D: DataType = "SDFGrid2D"
+local TEXTURE_2D: DataType = "Texture2D"
 local NUMBER: DataType = "Number"
 
 DataTypes.POINTS = POINTS
 DataTypes.INSTANCES = INSTANCES
 DataTypes.SDF_GRID_2D = SDF_GRID_2D
+DataTypes.TEXTURE_2D = TEXTURE_2D
 DataTypes.NUMBER = NUMBER
 
 -- One slot down the left of a node's card, and the wire dropped on it.
@@ -73,36 +78,40 @@ local PRODUCES: { [string]: DataType } = {
 	SnapPointsToTerrain = POINTS,
 	PlaceGeometryOnPoints = INSTANCES,
 	MaterialSDF2D = SDF_GRID_2D,
+	SDFThreshold2D = TEXTURE_2D,
+	NoiseTexture2D = TEXTURE_2D,
 	Number = NUMBER,
 }
 
--- The mask every point-producing node takes: a field to measure candidate points
--- against, and how far from it they have to be. Declared once, since they all read
--- it the same way and their slots have to be named the same for it.
-local MASK_SLOTS: { Slot } = {
-	{ name = "SDFMask", label = "SDF Mask", dataType = SDF_GRID_2D, wireNodeType = SDF_GRID_2D },
-	{ name = "MaskDistance", label = "Mask Distance", dataType = NUMBER, wireNodeType = NUMBER },
-}
+-- The density every point-producing node takes: a texture saying how much of a
+-- scatter survives where. Declared once, since they all read it the same way and
+-- their slots have to be named the same for it.
+local DENSITY_SLOT: Slot = { name = "Density", dataType = TEXTURE_2D, wireNodeType = TEXTURE_2D }
 
 -- What a node reads, by NodeType, in the order the slots are drawn. A node with
 -- no entry here reads nothing: a note is not a working node at all.
 local INPUTS: { [string]: { Slot } } = {
 	-- Where a chain starts, and so the only node here that reads no points.
 	ScatterPoints = {
-		MASK_SLOTS[1],
-		MASK_SLOTS[2],
+		DENSITY_SLOT,
 	},
 
 	ScatterPointsAroundPoints = {
 		{ name = "Points", dataType = POINTS, wireNodeType = POINTS },
-		MASK_SLOTS[1],
-		MASK_SLOTS[2],
+		DENSITY_SLOT,
 	},
 
 	SnapPointsToTerrain = {
 		{ name = "Points", dataType = POINTS, wireNodeType = POINTS },
-		MASK_SLOTS[1],
-		MASK_SLOTS[2],
+		DENSITY_SLOT,
+	},
+
+	-- A field and where to cut it. The distance is a slot rather than a number on
+	-- the node so that several rules can be cut at one distance by wiring them all
+	-- to the same Number.
+	SDFThreshold2D = {
+		{ name = "SDF", label = "SDF", dataType = SDF_GRID_2D, wireNodeType = SDF_GRID_2D },
+		{ name = "Distance", dataType = NUMBER, wireNodeType = NUMBER },
 	},
 
 	PlaceGeometryOnPoints = {
@@ -123,6 +132,7 @@ local COLORS: { [string]: Color3 } = {
 	Points = Color3.fromRGB(82, 152, 236),
 	Instances = Color3.fromRGB(92, 184, 108),
 	SDFGrid2D = Color3.fromRGB(226, 192, 68),
+	Texture2D = Color3.fromRGB(232, 110, 96),
 	Number = Color3.fromRGB(176, 138, 220),
 }
 
@@ -135,6 +145,7 @@ local LABELS: { [string]: string } = {
 	Points = "points",
 	Instances = "instances",
 	SDFGrid2D = "2D SDF grid",
+	Texture2D = "2D texture",
 	Number = "number",
 }
 

@@ -161,6 +161,39 @@ local SCHEMA: { [string]: { Descriptor } } = {
 		},
 	},
 
+	NoiseTexture2D = {
+		{
+			name = "Scale",
+			kind = "number",
+			optional = true,
+			default = 64,
+			description = "How wide one blotch of the noise is, in studs. Larger is broader patchiness "
+				.. "across a biome; smaller breaks the scatter up more finely, down to about the cell "
+				.. "size, past which there is no pattern left to see.",
+		},
+		{
+			name = "Phase",
+			kind = "number",
+			optional = true,
+			default = 0,
+			description = "Which slice of the noise this is. Two nodes at the same Scale and different "
+				.. "Phases give unrelated patterns over the same ground, so two rules can thin out "
+				.. "independently rather than in step.",
+		},
+		{
+			name = "VoxelSize",
+			label = "Voxel Size",
+			kind = "number",
+			optional = true,
+			default = 4,
+			description = "The edge of one cell of the texture, in studs. Only worth changing for a "
+				.. "Scale near it, where the pattern is finer than the cells can carry.",
+		},
+	},
+
+	-- Both of its parameters arrive over wires, so it has none of its own.
+	SDFThreshold2D = {},
+
 	PlaceGeometryOnPoints = {
 		-- The asset placed at each point. The runtime still accepts an in-scene
 		-- template through a child ObjectValue named Asset, but that path is not

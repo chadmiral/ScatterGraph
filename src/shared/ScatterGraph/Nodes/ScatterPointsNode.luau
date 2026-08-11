@@ -101,10 +101,9 @@ function ScatterPointsNode:evaluate(volumes, terrain, ctx)
         return points
     end
 
-    --the field is flat, so a candidate is measured by the ground it stands over
+    --the texture is flat, so a candidate is measured by the ground it stands over
     --whether or not anything has snapped it there yet
-    local mask, maskDistance = Helpers.readMask(ctx.node, volumes, terrain, ctx)
-    return Helpers.maskPoints(points, mask, maskDistance)
+    return Helpers.filterByDensity(points, Helpers.readDensity(ctx.node, volumes, terrain, ctx))
 end
 
 return ScatterPointsNode

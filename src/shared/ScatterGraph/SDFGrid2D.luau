@@ -4,47 +4,30 @@
 	A shape on the ground, measured onto a grid: a rectangle of cells covering it,
 	each holding how far its centre is from the nearest edge of the shape, negative
 	inside. A field like this answers "how close is this spot to that shape" in
-	constant time however complicated the shape, which is what lets a scatter of
-	tens of thousands of points be masked around one.
+	constant time however complicated the shape -- which is what lets a whole biome
+	be shaped around water, or a road, at the cost of measuring it once.
 
-	The field is flat. Scattering is a top-down business -- points are spread across
-	a footprint and dropped onto the ground -- so what a mask needs to know is how
-	far a spot is from water or from sand as seen from above, and a plane of cells
-	answers that with none of the cost of a box of them. Everything in the plane is
-	a Vector2 of world X and Z: read the `Y` of one of these as the world's Z, and
-	nothing here has a height at all.
-
-	The grid travels between nodes as one value, so it carries what is needed to
-	read it as well as the distances themselves: where it starts, how big a cell is,
-	and how many of them it holds each way. A node handed one needs nothing else to
-	sample it.
+	The field is flat, and sits on a [GridLayout2D] like everything else measured
+	over the ground being scattered. It travels between nodes as one value, carrying
+	that layout along with the distances, so a node handed one needs nothing else to
+	read it: cell by cell, as [SDFThreshold2DNode] does when it cuts one into a
+	density texture, or at a world position through `GridLayout2D.read`.
 
 	`fromCells` fills one from a region already marked off cell by cell -- terrain
 	material, say, which is only ever known that coarsely -- and works the distances
 	out from the marks themselves.
-
-	Where a field sits and how finely it is measured is a `Layout`. The rectangle
-	comes from the volumes being scattered -- `layoutFor` settles it and the
-	evaluator hands it down the graph, so every field in a run covers the same
-	ground -- while how finely that rectangle is divided is the one part the node
-	measuring a field may ask for.
-
-	Cells are counted before they are filled, and a budget coarsens the field rather
-	than letting a stray parameter hang Studio.
 ]]
+
+local GridLayout2D = require(script.Parent:WaitForChild("GridLayout2D"))
 
 local SDFGrid2D = {}
 
 export type Grid = {
-	-- World X and Z of the centre of the cell at (0, 0).
+	-- Where the field sits and how finely it is measured.
 	origin: Vector2,
-	-- The edge length of one cell, in studs, after the budget below has had its
-	-- say. Not necessarily the size that was asked for.
 	voxelSize: number,
-	-- How many cells across X and Z. Whole numbers, at least two.
 	resolution: Vector2,
-	-- How much ground the cell centres span, in studs: the distance from the first
-	-- centre to the last, each way.
+	-- How much ground the cell centres span, in studs.
 	dimensions: Vector2,
 	-- The signed distance at every cell centre, X fastest, then Z.
 	distances: { number },
@@ -52,135 +35,6 @@ export type Grid = {
 	-- can say where it came from.
 	source: Instance?,
 }
-
--- Where a field sits and how finely it is measured, without the measurements: the
--- part of a grid that is decided before anything is measured at all, and so the
--- part that can be settled once and shared.
-export type Layout = {
-	origin: Vector2,
-	voxelSize: number,
-	resolution: Vector2,
-}
-
--- How far past the region of interest the field is measured, in cells. Two is
--- enough that a sample just outside it still lands between measured cells rather
--- than against the edge of the grid.
-local PADDING_CELLS = 2
-
--- Below this a cell is finer than any placement decision could use, and the count
--- of them climbs as the square of it.
-local MIN_VOXEL_SIZE = 0.1
-
--- Terrain is stored on a four stud grid and reads back at that and nothing else,
--- so a field over the world starts there. It is the finest a material boundary is
--- known to, and no amount of grid would invent more.
-local TERRAIN_VOXEL = 4
-
-SDFGrid2D.TERRAIN_VOXEL = TERRAIN_VOXEL
-
--- The most cells one field may hold. Ten million is a few hundred megabytes and
--- some seconds while a graph is being evaluated. Flat, that is a great deal of
--- ground -- twelve thousand studs square at terrain's own four studs -- so this is
--- a backstop against a mistyped parameter rather than a limit anything real meets.
-local MAX_CELLS = 10000000
-
--- The ground a layout covers: everything the volume group reaches in X and Z,
--- snapped out to whole cells of the size being measured at, and padded by a couple
--- of them so the field carries on a little way past the ground being scattered.
-local function rectangleFor(volumes, voxelSize: number): (Vector2, Vector2)
-	local low = Vector2.new(math.huge, math.huge)
-	local high = Vector2.new(-math.huge, -math.huge)
-
-	for _, box in volumes:footprintBoundsList() do
-		low = Vector2.new(math.min(low.X, box.minX), math.min(low.Y, box.minZ))
-		high = Vector2.new(math.max(high.X, box.maxX), math.max(high.Y, box.maxZ))
-	end
-
-	local padding = voxelSize * PADDING_CELLS
-
-	local function down(value: number): number
-		return math.floor(value / voxelSize) * voxelSize
-	end
-
-	local function up(value: number): number
-		return math.ceil(value / voxelSize) * voxelSize
-	end
-
-	return Vector2.new(down(low.X), down(low.Y)) - Vector2.new(padding, padding),
-		Vector2.new(up(high.X), up(high.Y)) + Vector2.new(padding, padding)
-end
-
---[[
-	The grid a field over a volume group is measured on: the ground the volumes
-	cover, divided into cells `voxelSize` across -- terrain's own four studs, where
-	the caller has no opinion.
-
-	The rectangle is the group's, not the caller's. It is settled before any node
-	runs and handed down the graph as it is evaluated, so that what a field covers
-	answers to the ground being scattered rather than to whichever node happens to
-	measure it. How finely that rectangle is divided is the one part a node may ask
-	for, since two fields of different resolutions still cover the same ground and
-	are still read the same way -- by sampling a world position, not an index.
-
-	Cells double -- to eight studs, then sixteen -- until the field fits the budget,
-	with a warning saying so. Doubling rather than scaling keeps whatever alignment
-	with the terrain grid the size asked for had.
-]]
-function SDFGrid2D.layoutFor(volumes, requested: number?): Layout
-	local asked = math.max(requested or TERRAIN_VOXEL, MIN_VOXEL_SIZE)
-	local voxelSize = asked
-
-	while true do
-		local low, high = rectangleFor(volumes, voxelSize)
-		local span = high - low
-
-		-- The rectangle is a whole number of cells across by construction, so this
-		-- is rounding off arithmetic rather than deciding anything.
-		local countX = math.max(2, math.round(span.X / voxelSize))
-		local countZ = math.max(2, math.round(span.Y / voxelSize))
-
-		if countX * countZ <= MAX_CELLS then
-			-- Only worth saying to whoever asked for a size and did not get it. The
-			-- default layout is settled for every run whether a field is measured
-			-- over it or not, and has nobody to tell.
-			if requested ~= nil and voxelSize > asked then
-				warn(
-					string.format(
-						"ScatterGraph: %s covers %.0f x %.0f studs, too much ground to measure a distance "
-							.. "field over at a %g stud cell within the %d one field may hold, so the field "
-							.. "was measured at %g studs instead. Raise Voxel Size to choose the resolution "
-							.. "yourself.",
-						volumes.name,
-						span.X,
-						span.Y,
-						asked,
-						MAX_CELLS,
-						voxelSize
-					)
-				)
-			end
-
-			-- A grid holds distances at cell centres, so it begins half a cell in
-			-- from the corner of the rectangle.
-			local half = voxelSize * 0.5
-
-			return {
-				origin = low + Vector2.new(half, half),
-				voxelSize = voxelSize,
-				resolution = Vector2.new(countX, countZ),
-			}
-		end
-
-		voxelSize *= 2
-	end
-end
-
--- The corner of the ground a layout covers: half a cell out from the first centre,
--- which is where anything walking the layout against the world has to start.
-function SDFGrid2D.corner(layout: Layout): Vector2
-	local half = layout.voxelSize * 0.5
-	return layout.origin - Vector2.new(half, half)
-end
 
 -- A number standing in for "further than anything in this grid". Not math.huge:
 -- the transform below subtracts one of these from another, and infinity minus
@@ -301,7 +155,7 @@ end
 	cell size before that shift. A field this coarse is not the shape of the marked
 	region in any fine sense -- it is as much of one as cells can carry.
 ]]
-function SDFGrid2D.fromCells(layout: Layout, marked: { boolean }, source: Instance?): Grid
+function SDFGrid2D.fromCells(layout: GridLayout2D.Layout, marked: { boolean }, source: Instance?): Grid
 	local voxelSize = layout.voxelSize
 	local countX, countZ = layout.resolution.X, layout.resolution.Y
 	local total = countX * countZ
@@ -324,64 +178,17 @@ function SDFGrid2D.fromCells(layout: Layout, marked: { boolean }, source: Instan
 		origin = layout.origin,
 		voxelSize = voxelSize,
 		resolution = layout.resolution,
-		dimensions = Vector2.new((countX - 1) * voxelSize, (countZ - 1) * voxelSize),
+		dimensions = GridLayout2D.dimensions(layout),
 		distances = distances,
 		source = source,
 	}
 end
 
--- Is this what a node produced when a grid was expected? A wire can be pointed
--- at any node from the Explorer, so a mask input may be fed points, or nothing.
+-- Is this what a node produced when a field was expected? A wire can be pointed at
+-- any node from the Explorer, so a slot may be fed points, or a texture, or
+-- nothing.
 function SDFGrid2D.is(value: any): boolean
-	return typeof(value) == "table" and typeof(value.origin) == "Vector2" and typeof(value.distances) == "table"
-end
-
--- How far the given world point is from the measured boundary, negative inside it.
--- The point's height is not read: the field is flat, and a spot is as near the
--- water below it as the water is to it.
---
--- Read between the four cell centres around the point, so the field reads as a
--- smooth distance rather than in steps of a cell.
---
--- A point past the edge of the grid is still answered, and answered safely: the
--- field is read at the nearest place it was measured and then pushed out by
--- however far the point actually is from there. Distance to a boundary changes no
--- faster than distance itself, so that can only ever overstate how far away a
--- point is -- it never claims a point is closer to the boundary than it is.
-function SDFGrid2D.sample(grid: Grid, point: Vector3): number
-	local resolution = grid.resolution
-	local lastX, lastZ = resolution.X - 1, resolution.Y - 1
-
-	-- Where the point sits in cells from the origin, and where in the grid that is
-	-- once it has been brought inside it.
-	local atX = (point.X - grid.origin.X) / grid.voxelSize
-	local atZ = (point.Z - grid.origin.Y) / grid.voxelSize
-	local x = math.clamp(atX, 0, lastX)
-	local z = math.clamp(atZ, 0, lastZ)
-
-	local x0, z0 = math.floor(x), math.floor(z)
-	local x1, z1 = math.min(x0 + 1, lastX), math.min(z0 + 1, lastZ)
-	local tx, tz = x - x0, z - z0
-
-	local distances = grid.distances
-	local countX = resolution.X
-
-	local function distanceAt(i: number, k: number): number
-		return distances[1 + i + k * countX]
-	end
-
-	local function lerp(a: number, b: number, t: number): number
-		return a + (b - a) * t
-	end
-
-	local low = lerp(distanceAt(x0, z0), distanceAt(x1, z0), tx)
-	local high = lerp(distanceAt(x0, z1), distanceAt(x1, z1), tx)
-
-	-- Whatever bringing the point inside the grid moved it by is distance the point
-	-- is from the boundary as surely as the field it landed on.
-	local beyond = Vector2.new(atX - x, atZ - z).Magnitude * grid.voxelSize
-
-	return lerp(low, high, tz) + beyond
+	return GridLayout2D.isLaidOut(value) and typeof(value.distances) == "table"
 end
 
 return SDFGrid2D

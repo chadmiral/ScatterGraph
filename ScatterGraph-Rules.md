@@ -10,7 +10,7 @@ This document describes every node type, attribute, wire, tag, and volume settin
 
 1. The plugin finds all instances tagged **`ScatterGraphVolume`**.
 2. Volumes with **`Enabled`** = `true` are grouped by the biome graph they link to (see [Scatter volume](#scatter-volume)), and each group is evaluated **once** for all of its volumes (see [Overlapping volumes](#overlapping-volumes)).
-3. The ground the group covers settles the [distance field grid](#the-distance-field-grid) for the whole evaluation, before any node runs.
+3. The ground the group covers settles the [grid](#the-grid) that fields and textures are measured onto for the whole evaluation, before any node runs.
 4. It finds children of the graph root with **`NodeType`** = **`Output`** and evaluates each one.
 5. **`Output`** nodes follow **`ObjectValue`** wires to terminal **`PlaceGeometryOnPoints`** nodes.
 6. Each node walks upstream through **`Points`** wires until it reaches a source **`ScatterPoints`** node. The rule being evaluated and the grid go down with the call, so every node in a chain sees them.
@@ -25,6 +25,8 @@ This document describes every node type, attribute, wire, tag, and volume settin
 | `ScatterPointsAroundPoints` | Expands each upstream point into a local cluster |
 | `SnapPointsToTerrain` | Raycasts to terrain; filters by slope and material |
 | `MaterialSDF2D` | Measures how far every spot of ground under the volumes is from named terrain materials, seen from above |
+| `SDFThreshold2D` | Cuts a distance field at a distance, giving a density texture that is white beyond it and black within |
+| `NoiseTexture2D` | Fills a density texture with Perlin noise, to break a scatter up in soft patches |
 | `Number` | Holds one number for other nodes to read |
 | `PlaceGeometryOnPoints` | Clones and places asset geometry at each point |
 
@@ -82,8 +84,9 @@ A wire between two nodes carries one of these kinds of thing, and each end of it
 |-----------|------------|-------------|---------|-------------|
 | **Points** | A cloud of positions | `ScatterPoints`, `ScatterPointsAroundPoints`, `SnapPointsToTerrain` | `ScatterPointsAroundPoints`, `SnapPointsToTerrain`, `PlaceGeometryOnPoints` | Blue |
 | **Instances** | The geometry a rule has placed in the world | `PlaceGeometryOnPoints` | `Output` | Green |
-| **SDF Grid 2D** | A shape on the ground measured onto a rectangle of cells as the signed distance to its edge, seen from above | `MaterialSDF2D` | `ScatterPoints`, `ScatterPointsAroundPoints`, `SnapPointsToTerrain` | Yellow |
-| **Number** | A single value | `Number` | `ScatterPoints`, `ScatterPointsAroundPoints`, `SnapPointsToTerrain` | Violet |
+| **SDF Grid 2D** | A shape on the ground measured onto a rectangle of cells as the signed distance to its edge, seen from above | `MaterialSDF2D` | `SDFThreshold2D` | Yellow |
+| **Texture 2D** | A greyscale image laid over the ground, read as [how much of a scatter survives where](#density-masking) | `SDFThreshold2D`, `NoiseTexture2D` | `ScatterPoints`, `ScatterPointsAroundPoints`, `SnapPointsToTerrain` | Salmon |
+| **Number** | A single value | `Number` | `SDFThreshold2D` | Violet |
 
 A **Number** port left unwired stands at its own default rather than at nothing, so wiring one is a way to make several nodes agree on a value, not a requirement.
 
@@ -91,16 +94,20 @@ The Graph View draws every port in its type's colour — filled when something i
 
 Which node produces which type, and which slots each one reads, lives in `src/shared/ScatterGraph/DataTypes.luau`. Evaluation itself does not check types: a node reads its input by wire name and takes whatever the upstream node returned.
 
-### The distance field grid
+### The grid
 
-A field is **flat**. Scattering is a top-down business — points are spread across a footprint and dropped onto the ground — so what a mask needs to know is how far a spot is from water or from sand *as seen from above*, and a rectangle of cells answers that at a fraction of the cost of a box of them. A field has no height at all: sampling one reads the point's X and Z and ignores its Y, so a point 500 studs in the air reads exactly what the ground below it reads.
+Two kinds of thing are measured over the ground being scattered — a [distance field](#materialsdf2d) and a [density texture](#density-masking) — and both sit on the same kind of grid, so it is described once here.
 
-**What ground a field covers is the scatter volumes' to decide, not the node's.** The plugin works the rectangle out from the group's bounds before the first **`Output`** node is reached, and it goes down the graph with the evaluation, so every field in one evaluation covers the same ground. How finely that rectangle is divided is the one part the node measuring a field asks for, through its **`VoxelSize`**. Two fields at different cell sizes are still read the same way — by sampling a world position rather than an index — so they need not line up cell for cell.
+A grid is **flat**. Scattering is a top-down business — points are spread across a footprint and dropped onto the ground — so what a mask needs to know is how far a spot is from water or from sand *as seen from above*, and a rectangle of cells answers that at a fraction of the cost of a box of them. A grid has no height at all: sampling one reads the point's X and Z and ignores its Y, so a point 500 studs in the air reads exactly what the ground below it reads.
+
+**What ground a grid covers is the scatter volumes' to decide, not the node's.** The plugin works the rectangle out from the group's bounds before the first **`Output`** node is reached, and it goes down the graph with the evaluation, so everything measured in one evaluation covers the same ground. How finely that rectangle is divided is the one part a measuring node asks for, through its **`VoxelSize`**. Two grids at different cell sizes are still read the same way — by sampling a world position rather than an index — so they need not line up cell for cell.
+
+Values are held at cell centres and read **between** them, so a grid answers smoothly rather than in steps of a cell. That matters more for a texture than a field: it is why a hard black-and-white edge in a texture thins a scatter through a cell-wide band of greys instead of cutting a straight line across it.
 
 | Part of the grid | How it is decided |
 |------------------|-------------------|
-| **Extent** | The X and Z bounds of every volume in the group, snapped out to whole cells and padded by two of them, so a field carries on a little way past the ground being scattered. A coarse field therefore reaches further out than a fine one over the same volumes. |
-| **Cell size** | The measuring node's **`VoxelSize`**, **4 studs** by default — terrain's own grid, the finest a material boundary is known to. Doubles to 8, 16 and so on until the field fits the ten million cells one may hold, warning when it does. |
+| **Extent** | The X and Z bounds of every volume in the group, snapped out to whole cells and padded by two of them, so a grid carries on a little way past the ground being scattered. A coarse grid therefore reaches further out than a fine one over the same volumes. |
+| **Cell size** | The measuring node's **`VoxelSize`**, **4 studs** by default — terrain's own grid, the finest a material boundary is known to. Doubles to 8, 16 and so on until the grid fits the ten million cells one may hold, warning when it does. |
 | **Origin** | The world X and Z of the centre of cell `(0, 0)`, half a cell in from the corner of that rectangle. |
 | **Resolution** | Cell counts across X and Z, at least 2. |
 
@@ -108,9 +115,9 @@ A 160 × 160 stud footprint comes out as 45 × 45 cells at the default 4 studs. 
 
 Because the count grows as the square of the ground rather than the cube, the ten million cell ceiling is a backstop against a mistyped parameter rather than a limit real work meets: it is twelve thousand studs square at 4 studs.
 
-Cell size buys accuracy near a boundary, not shape: the material is only ever known per 4-stud terrain voxel, so a finer field divides the same blocky patches more finely rather than finding a truer edge.
+Cell size buys accuracy near a boundary, not shape: the material is only ever known per 4-stud terrain voxel, so a finer field divides the same blocky patches more finely rather than finding a truer edge. A texture is cheaper again — a noise texture over that whole biome is about 10 ms, since there is no terrain to read.
 
-`SDFGrid2D.layoutFor` in `src/shared/ScatterGraph/SDFGrid2D.luau` is what settles it.
+`GridLayout2D.layoutFor` in `src/shared/ScatterGraph/GridLayout2D.luau` is what settles it.
 
 **Typical chains:**
 
@@ -191,8 +198,7 @@ Generates an initial point cloud using a simplified Poisson-disc grid: one jitte
 
 | Wire | Required | Description |
 |------|----------|-------------|
-| **`SDFMask`** | No | A [distance field](#sdf-masking) to test candidates against. Nothing wired means nothing masked. |
-| **`MaskDistance`** | No | How far off that field a candidate must be. Defaults to `0`. |
+| **`Density`** | No | A [density texture](#density-masking) thinning the candidates out. Nothing wired keeps them all. |
 
 **Output:** `{ Vector3 }` — world-space positions, at the middle of the volume group's vertical span until something snaps them.
 
@@ -213,8 +219,7 @@ For each point from upstream, generates up to **`Count`** additional points in a
 | Wire | Required | Description |
 |------|----------|-------------|
 | **`Points`** | Yes | Upstream node (typically **`ScatterPoints`**). |
-| **`SDFMask`** | No | A [distance field](#sdf-masking) to test the cluster points against. Nothing wired means nothing masked. |
-| **`MaskDistance`** | No | How far off that field a cluster point must be. Defaults to `0`. |
+| **`Density`** | No | A [density texture](#density-masking) thinning the cluster points out. Nothing wired keeps them all. |
 
 **Output:** `{ Vector3 }` — cluster offset points only (does **not** pass through upstream seed positions; generates **`Count`** new points per upstream seed).
 
@@ -237,12 +242,11 @@ Raycasts each point downward through the scatter volume to find terrain. Snaps s
 | Wire | Required | Description |
 |------|----------|-------------|
 | **`Points`** | Yes | Upstream node providing candidate positions. |
-| **`SDFMask`** | No | A [distance field](#sdf-masking) to test the snapped points against. Nothing wired means nothing masked. |
-| **`MaskDistance`** | No | How far off that field a snapped point must be. Defaults to `0`. |
+| **`Density`** | No | A [density texture](#density-masking) thinning the snapped points out. Nothing wired keeps them all. |
 
 **Output:** `{ Vector3 }` — terrain-snapped, filtered positions, all inside the volume.
 
-The mask is applied **after** the snap, so a point is measured against the field where it ends up rather than where it started. This is the node to mask on when the field measures terrain.
+The texture is read **after** the snap, over what survived the snap's own filters. Since a texture is flat that is the same answer as reading it before, over fewer points.
 
 **Example `SlopeFilter` values:**
 
@@ -256,7 +260,7 @@ Set via `SetAttribute("SlopeFilter", NumberSequence.new(...))` in Studio so the 
 
 ### MaterialSDF2D
 
-Source node. Measures where named terrain materials are into a flat signed distance field over the ground being scattered: every cell holds how far it is from the nearest ground whose surface is one of those materials, negative on the material itself. Something reading the field can then hold points a distance clear of water, or to the edge of sand, without touching the terrain itself.
+Source node. Measures where named terrain materials are into a flat signed distance field over the ground being scattered: every cell holds how far it is from the nearest ground whose surface is one of those materials, negative on the material itself. Wire it into [`SDFThreshold2D`](#sdfthreshold2d) to turn that into ground a rule may or may not plant on.
 
 Materials are named as strings, which is what keeps the node place-agnostic: a graph is shared between places and may point at nothing in one of them, but `Water` means water everywhere.
 
@@ -268,24 +272,76 @@ Materials are named as strings, which is what keeps the node place-agnostic: a g
 
 **Inputs:** None (source node).
 
-**Output:** an [SDF Grid 2D](#data-types) — `{ origin, voxelSize, resolution, dimensions, distances, source }`, where `origin`, `resolution` and `dimensions` are `Vector2`s of world X and Z. Read back with `SDFGrid2D.sample(grid, worldPoint)`, which ignores the point's Y.
+**Output:** an [SDF Grid 2D](#data-types) — `{ origin, voxelSize, resolution, dimensions, distances, source }`, where `origin`, `resolution` and `dimensions` are `Vector2`s of world X and Z. Read cell by cell, or at a world position with `GridLayout2D.read(grid, grid.distances, worldPoint)`, which ignores the point's Y.
 
 **The field:**
 
 - **What a spot's material is.** What is seen looking straight down at it: the topmost terrain voxel with anything in it, within the height the volumes span. That is the same surface **`SnapPointsToTerrain`** casts its rays onto, so a mask and the points it masks agree about the ground. Water reads as water because water is what is on top there, and the ground under a lake is not sand as far as this node is concerned — nor is buried material anything at all. In the Elwynn biome, `Ground` is the surface of 1,814 of 55,290 cells while `Grass` is 46,041 of them.
-- **Where it is measured.** Over [the ground the scatter volumes set](#the-distance-field-grid), which the node does not choose, divided into cells of its own **`VoxelSize`**, which it does. A point sampled beyond the edge of the grid is still answered, and the answer is never nearer than the truth.
+- **Where it is measured.** Over [the ground the scatter volumes set](#the-grid), which the node does not choose, divided into cells of its own **`VoxelSize`**, which it does.
 - **What the numbers mean.** Zero on the boundary between the material and everything else, negative on it, positive off it, in studs. Distances are measured from cell centre to cell centre and then brought half a cell in, which puts the zero crossing on the edges the two sides share. A voxel one tenth full of water is water: anything keeping clear of a shoreline should keep clear of all of it. A cell counts as the material if any part of a terrain voxel of it lies in there — so a coarse cell takes in several terrain columns and a fine one is one of several taking in the same column — which spreads the material out rather than dropping it.
-- **When there is none of it.** A material that is nowhere on the surface in range leaves every cell reading as astronomically far away, not zero, so a mask over it simply never rejects anything.
+- **When there is none of it.** A material that is nowhere on the surface in range leaves every cell reading as astronomically far away, not zero, so a texture cut from it comes out white everywhere and thins nothing — rather than black everywhere, which would remove the scatter entirely.
 
-**Cost:** the terrain is read a patch at a time, top down, and each patch stops being read as soon as every column in it has found its surface — so nothing below the ground is read at all. The distances are then worked out with a separable exact distance transform, two passes over the cells rather than a search around each one. The field is measured once per evaluation and reused by every rule that masks against it, so wiring one node's field into several rules costs no more than one.
+**Cost:** the terrain is read a patch at a time, top down, and each patch stops being read as soon as every column in it has found its surface — so nothing below the ground is read at all. The distances are then worked out with a separable exact distance transform, two passes over the cells rather than a search around each one. Measuring the Elwynn biome's field takes about 200 ms, nearly all of it reading terrain. The field is measured once per evaluation however many nodes read it.
 
-**Read by:** [SDF masking](#sdf-masking) on **`ScatterPoints`**, **`ScatterPointsAroundPoints`** and **`SnapPointsToTerrain`**.
+**Read by:** [`SDFThreshold2D`](#sdfthreshold2d).
+
+---
+
+### SDFThreshold2D
+
+Cuts a [distance field](#materialsdf2d) at a distance and hands back what is left as a [density texture](#density-masking): **white** where the field reads at or beyond **`Distance`**, **black** where it reads short of it. This is what turns *how far is this spot from the road* into *may anything grow here*.
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **`NodeType`** | `string` | Yes | **`SDFThreshold2D`** |
+
+No attributes of its own: both of its parameters arrive over wires.
+
+| Wire | Required | Description |
+|------|----------|-------------|
+| **`SDF`** | Yes | The field to cut. Nothing wired produces nothing, with a warning. |
+| **`Distance`** | No | Where to cut it, in studs. Defaults to `0`. Wire a [`Number`](#number) node here to set it, or to cut several rules at one distance. |
+
+Since a field reads negative on the material it measures:
+
+| `Distance` | White (kept) where |
+|------------|--------------------|
+| `0` | Anywhere off the material |
+| `12` | At least 12 studs clear of it |
+| `-8` | Off it, and up to 8 studs onto it |
+
+**Output:** a [Texture 2D](#data-types) on the field's own cells, so nothing is resampled and the edge lands exactly where the field puts it. Reading between cells then leaves that edge soft by about a cell, which dithers the boundary instead of drawing a line across the scatter — of 5,506 candidates over the Elwynn biome, a few hundred fall in that band.
+
+A field naming a material the place does not have reads as astronomically far away everywhere, so cutting it gives an all-white texture that thins nothing, rather than a black one that removes everything.
+
+---
+
+### NoiseTexture2D
+
+Source node. Fills a [density texture](#density-masking) with Perlin noise: soft blotches over the ground, mid grey on average, running to white where the noise peaks and black where it troughs. Wired into a **`Density`** slot it breaks a scatter up the way ground cover actually grows — thick in places, thin in others, with no edge anywhere — which even spacing and a uniform count cannot do on their own.
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **`NodeType`** | `string` | Yes | **`NoiseTexture2D`** |
+| **`Scale`** | `number` | No | How wide one blotch is, in studs. Defaults to **`64`**, about a clearing. Larger is broader patchiness; smaller breaks the scatter up more finely, down to about the cell size. A value below `1` is read as `1`, with a warning. |
+| **`Phase`** | `number` | No | Which slice of the noise this is. Defaults to `0`. Two nodes at the same **`Scale`** and different **`Phase`**s give unrelated patterns over the same ground. |
+| **`VoxelSize`** | `number` | No | The edge of one cell, in studs. Defaults to **`4`**. Only worth changing for a **`Scale`** near it, where the pattern is finer than the cells can carry. |
+
+**Inputs:** None (source node).
+
+**Output:** a [Texture 2D](#data-types) over [the ground the scatter volumes set](#the-grid).
+
+**The noise:**
+
+- **It is a function of position, not a picture.** The same ground gives the same blotches every run, so moving a volume moves the scatter through the pattern rather than reshuffling it, and two rules reading one node thin out together.
+- **Mid grey on average.** Over the Elwynn biome the mean is 0.503 and about half of any scatter survives it. Roughly a tenth of the ground is dark enough to be nearly bare and a tenth pale enough to be nearly untouched.
+- **It clips at the ends.** Roblox's noise mostly keeps within half a unit of zero but overshoots on a few cells in a hundred, and those clamp to solid black or white — which is what puts the occasional bare clearing and solid thicket in an otherwise probabilistic texture.
 
 ---
 
 ### Number
 
-Source node. Holds one number and hands it to everything wired to it. There is nothing to compute; the node exists so that a figure several rules depend on — a mask distance, typically — is one thing in one place rather than the same number typed into each of them. Change the node and every rule reading it changes together.
+Source node. Holds one number and hands it to everything wired to it. There is nothing to compute; the node exists so that a figure several rules depend on — a threshold distance, typically — is one thing in one place rather than the same number typed into each of them. Change the node and every rule reading it changes together.
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -385,36 +441,41 @@ Because a rule's identity comes from the `Output` entry that names it, a node sh
 
 ---
 
-## SDF masking
+## Density masking
 
-Where an exclusion volume is a shape in the place that keeps points out of itself, a mask is a **distance field wired into a node**, and it keeps points a chosen distance away from whatever that field measures. It lives in the graph and travels with it: `MaterialSDF2D` names its materials as strings, so a mask that keeps trees out of water works in any place that has water.
+Where an exclusion volume is a shape in the place that keeps points out of itself, a density is a **greyscale image wired into a node**, and it decides how much of a scatter survives where. It lives in the graph and travels with it: nothing about a texture points at anything in a place, so a density that keeps trees off the roads works in any place that has roads.
 
-**`ScatterPoints`**, **`ScatterPointsAroundPoints`** and **`SnapPointsToTerrain`** each take two input ports for it:
+**`ScatterPoints`**, **`ScatterPointsAroundPoints`** and **`SnapPointsToTerrain`** each take one input port for it:
 
 | Port | Type | Default | What it is |
 |------|------|---------|------------|
-| **`SDF Mask`** | [SDF Grid 2D](#data-types) | *(nothing wired — nothing masked)* | The field candidates are measured against. |
-| **`Mask Distance`** | [Number](#data-types) | `0` | How far off it they have to be. Wire a [`Number`](#number) node here to set it, or to share one distance between rules. |
+| **`Density`** | [Texture 2D](#data-types) | *(nothing wired — nothing thinned)* | The chance a candidate standing there survives. |
 
-**The rule:** each candidate point is sampled in the field at its own `x, z`, and it is **rejected when the sampled distance is less than Mask Distance**. Since a field reads negative on the material it measures, that means:
+**The rule:** each candidate is read in the texture at its own `x, z`, and survives with that chance.
 
-| Mask Distance | Keeps points |
-|---------------|--------------|
-| `0` | Anywhere off the material |
-| `12` | At least 12 studs clear of it |
-| `-8` | Off it, and up to 8 studs onto it |
+| Where the texture reads | Chance of removal |
+|-------------------------|-------------------|
+| **White** (`1`) | none — every candidate stays |
+| **Mid grey** (`0.5`) | half |
+| **Black** (`0`) | certain — nothing stays |
 
-**Where in a chain you mask barely matters,** since the field is flat: a candidate is measured by the ground it stands over, whether or not anything has snapped it there yet.
+This is a **thinning rather than a cut**: except at pure black and white, whether a given point survives is a roll, so a texture shapes a scatter instead of clipping it. That is also why two textures can be applied one after another, on two nodes in a chain, and the result is what multiplying them would give.
 
-| Masking on | Tests | Worth knowing |
-|------------|-------|---------------|
-| **`ScatterPoints`** | Every candidate the rule starts with | Cheapest: candidates the mask rejects are never raycast by a later snap |
-| **`SnapPointsToTerrain`** | What survived the snap's own material and slope filters | Same answer as masking earlier, over fewer points |
-| **`ScatterPointsAroundPoints`** | The cluster points, not the seeds they grew from | A seed may stand on the masked material and still spread points clear of it |
+The roll is the same one the [slope filter](#snappointstoterrain) makes, drawn from the stream the rule's **`Seed`** started, so a graph run twice over unchanged ground thins out the same way twice.
 
-An empty **`SDF Mask`** port masks nothing, and so does one wired to a node that does not produce a field — that warns and carries on. A field naming a material the place does not have reads as astronomically far away everywhere, so it rejects nothing rather than everything.
+**Where in a chain you read a texture barely matters,** since a texture is flat: a candidate is measured by the ground it stands over, whether or not anything has snapped it there yet.
 
-Each field is measured once per evaluation however many rules mask against it.
+| Reading it on | Tests | Worth knowing |
+|---------------|-------|---------------|
+| **`ScatterPoints`** | Every candidate the rule starts with | Cheapest: candidates it removes are never raycast by a later snap |
+| **`SnapPointsToTerrain`** | What survived the snap's own material and slope filters | Same answer as reading it earlier, over fewer points |
+| **`ScatterPointsAroundPoints`** | The cluster points, not the seeds they grew from | A seed may stand on black ground and still spread points onto white |
+
+An empty **`Density`** port thins nothing, and so does one wired to a node that does not produce a texture — that warns and carries on. **Nothing wired keeps everything**, which is the opposite of what an all-black texture does, so a mistake fails towards a scatter that is too dense rather than one that has vanished.
+
+Each texture is built once per evaluation however many rules read it.
+
+**Making one:** [`SDFThreshold2D`](#sdfthreshold2d) cuts a [distance field](#materialsdf2d) into black and white — keep off the water, hold a clearing around the road. [`NoiseTexture2D`](#noisetexture2d) fills one with soft blotches to break a scatter up. Wiring both, on two nodes of one chain, gives patchy ground cover that also respects the roads.
 
 ---
 
@@ -529,6 +590,8 @@ A rule that loses a large fraction of its placements between runs — usually a 
 | `ScatterPointsAroundPoints` | `NodeType`, `Seed`, `InnerRadius`, `OuterRadius`, `Count` |
 | `SnapPointsToTerrain` | `NodeType`, `MaterialFilter`, `SlopeFilter` |
 | `MaterialSDF2D` | `NodeType`, `Materials`, `VoxelSize` |
+| `SDFThreshold2D` | `NodeType` *(both parameters are wires)* |
+| `NoiseTexture2D` | `NodeType`, `Scale`, `Phase`, `VoxelSize` |
 | `Number` | `NodeType`, `Value` |
 | `PlaceGeometryOnPoints` | `NodeType`, `GeometryAssetID`, `ScaleRange`, `RotationType`, `ColorRange`, `AvoidIntersections`, `Radius`, `Priority`, `RuleId` |
 | `Output` registry entry | `NodeType` = `OutputNode` |
@@ -536,8 +599,9 @@ A rule that loses a large fraction of its placements between runs — usually a 
 | Exclusion volume | *(no attributes; `ObjectValue` children aim it — see [Exclusion volumes](#exclusion-volumes))* |
 | Wire: `Points` | `NodeType` = `Points` |
 | Wire: `Asset` | `NodeType` = `Asset` |
-| Wire: `SDFMask` | `NodeType` = `SDFGrid2D` |
-| Wire: `MaskDistance` | `NodeType` = `Number` |
+| Wire: `Density` | `NodeType` = `Texture2D` |
+| Wire: `SDF` | `NodeType` = `SDFGrid2D` |
+| Wire: `Distance` | `NodeType` = `Number` |
 
 A **`PlaceGeometryOnPoints`** node added from a rule template also carries
 **`RuleId`** (a `string` GUID), the rule's durable identity for the records that
@@ -560,7 +624,9 @@ lists. Deleting it just returns the node to the automatic column layout.
 |------|------|
 | `src/shared/ScatterGraph/ScatterGraph.client.lua` | Plugin entry; volume grouping, node registry, evaluation loop |
 | `src/shared/ScatterGraph/ScatterGraphHelpers.luau` | Terrain snap, clustering, placement, exclusion zones |
-| `src/shared/ScatterGraph/SDFGrid2D.luau` | A shape on the ground measured onto a rectangle of cells as the distance to it, from cells already marked off as `MaterialSDF2D` marks them; how a point is read back out of one, and the [grid](#the-distance-field-grid) every field of one evaluation shares |
+| `src/shared/ScatterGraph/GridLayout2D.luau` | Where the flat [grid](#the-grid) every field and texture of one evaluation shares sits over the ground, and how a value is read back out of one at a world position |
+| `src/shared/ScatterGraph/SDFGrid2D.luau` | A shape on the ground measured onto that grid as the distance to it, from cells already marked off as `MaterialSDF2D` marks them |
+| `src/shared/ScatterGraph/Texture2D.luau` | A greyscale image on that grid, filled cell by cell or from a function of position, and read as a [density](#density-masking) |
 | `src/shared/ScatterGraph/RulesWindow.luau` | "Spreadsheet View" dock widget: lists the place's graphs and the chosen graph's outputs, edits the attributes and Asset wire of the nodes feeding each one, and adds or deletes both graphs and rules |
 | `src/shared/ScatterGraph/GraphView.luau` | "Graph View" dock widget: one graph as a canvas of wired nodes that can be added, moved, rewired and deleted, beside the parameters of the selected node |
 | `src/shared/ScatterGraph/Graphs.luau` | Which graphs the place holds, and which one the Studio selection names for the Graph View button to open |

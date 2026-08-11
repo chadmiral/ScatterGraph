@@ -116,15 +116,18 @@ local ZOOM_WHEEL_STEP = 1.075
 
 -- A title bar is coloured by what its node does, so a chain reads at a glance:
 -- green makes points, teal derives more points from them, brown puts them on the
--- ground, olive measures a field over it, violet holds a value the rest read, blue
--- places geometry, and grey is the outlet the graph ends at. These are fixed rather
--- than theme colours because they say which node type this is, not which part of
--- the window it is.
+-- ground, olive measures a field over it, rust turns something into a texture that
+-- thins a scatter out, violet holds a value the rest read, blue places geometry,
+-- and grey is the outlet the graph ends at. These are fixed rather than theme
+-- colours because they say which node type this is, not which part of the window it
+-- is.
 local TITLE_COLORS = {
 	ScatterPoints = Color3.fromRGB(62, 108, 74),
 	ScatterPointsAroundPoints = Color3.fromRGB(86, 142, 154),
 	SnapPointsToTerrain = Color3.fromRGB(122, 88, 50),
 	MaterialSDF2D = Color3.fromRGB(124, 110, 46),
+	SDFThreshold2D = Color3.fromRGB(140, 84, 62),
+	NoiseTexture2D = Color3.fromRGB(140, 84, 62),
 	Number = Color3.fromRGB(104, 78, 148),
 	PlaceGeometryOnPoints = Color3.fromRGB(78, 84, 134),
 	Output = Color3.fromRGB(84, 84, 92),
@@ -213,6 +216,18 @@ local NODE_TEMPLATES = {
 		name = "MaterialSDF2D",
 		nodeType = "MaterialSDF2D",
 		attributes = { Materials = "Water", VoxelSize = 4 },
+	},
+	{
+		label = "SDF Threshold",
+		name = "SDFThreshold2D",
+		nodeType = "SDFThreshold2D",
+		attributes = {},
+	},
+	{
+		label = "Noise Texture 2D",
+		name = "NoiseTexture2D",
+		nodeType = "NoiseTexture2D",
+		attributes = { Scale = 64, Phase = 0, VoxelSize = 4 },
 	},
 	{
 		label = "Number",

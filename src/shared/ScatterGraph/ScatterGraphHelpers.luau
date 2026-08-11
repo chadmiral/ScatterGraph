@@ -3,7 +3,7 @@ local CollectionService = game:GetService("CollectionService")
 local VolumeShape = require(script.Parent:WaitForChild("VolumeShape"))
 local PlacementStamp = require(script.Parent:WaitForChild("PlacementStamp"))
 local PlacementLedger = require(script.Parent:WaitForChild("PlacementLedger"))
-local SDFGrid2D = require(script.Parent:WaitForChild("SDFGrid2D"))
+local Texture2D = require(script.Parent:WaitForChild("Texture2D"))
 
 local M = {}
 
@@ -445,17 +445,13 @@ function M.excludePoints(points: { Vector3 }, exclusionFunctions: { (Vector3) ->
 	return newPoints
 end
 
--- The slots a scattering node takes its mask on, named as DataTypes declares
--- them: the field to measure candidates against, and how far off it they must be.
-local SDF_MASK_WIRE = "SDFMask"
-local MASK_DISTANCE_WIRE = "MaskDistance"
+-- The slot a scattering node takes its density on, named as DataTypes declares it.
+local DENSITY_WIRE = "Density"
 
--- What a Mask Distance slot stands at while nothing is wired to it. Zero rejects
--- a candidate inside the masked shape and nothing else, which is the least a mask
--- can be asked to do.
-local DEFAULT_MASK_DISTANCE = 0
-
-local function wireNamed(node: Instance, name: string): ObjectValue?
+-- The ObjectValue a node holds a named wire as, or nothing where that slot is
+-- empty. Wires are found by name rather than by the type stamped on them, so one
+-- hand-made in the Explorer works as well as one drawn on the canvas.
+function M.wireNamed(node: Instance, name: string): ObjectValue?
 	for _, child in node:GetChildren() do
 		if child:IsA("ObjectValue") and child.Name == name then
 			return child
@@ -466,62 +462,53 @@ local function wireNamed(node: Instance, name: string): ObjectValue?
 end
 
 --[[
-	The mask on a node: the field wired to its SDF Mask slot, and the distance
-	wired to its Mask Distance slot or the default in its place.
+	The density texture wired to a node's Density slot, or nothing where that slot
+	is empty -- which is not a mistake, since most nodes scatter evenly and have no
+	texture at all. A slot wired to something that does not produce a texture is a
+	mistake, and is said once per evaluation.
 
-	Both slots are read here rather than in each node, since both scattering nodes
-	take the same mask and would otherwise say so twice. A slot left empty is not a
-	mistake -- most nodes have no mask at all -- but a slot wired to something that
-	does not produce what it asks for is, and is said once per evaluation.
+	Read here rather than in each node, since all three scattering nodes take the
+	same slot and would otherwise say so three times.
 ]]
-function M.readMask(node: Instance, volumes, terrain, ctx): (SDFGrid2D.Grid?, number)
-	local distance = DEFAULT_MASK_DISTANCE
-
-	local distanceWire = wireNamed(node, MASK_DISTANCE_WIRE)
-	if distanceWire ~= nil and distanceWire.Value ~= nil then
-		local value = ctx.evaluateNode(distanceWire.Value, volumes, terrain, ctx.debugString)
-
-		if typeof(value) == "number" then
-			distance = value
-		else
-			warn(
-				"Node " .. node.Name .. ": its Mask Distance wire points at " .. distanceWire.Value.Name
-					.. ", which does not produce a number, so the mask stands at " .. DEFAULT_MASK_DISTANCE .. "."
-			)
-		end
+function M.readDensity(node: Instance, volumes, terrain, ctx): Texture2D.Texture?
+	local wire = M.wireNamed(node, DENSITY_WIRE)
+	if wire == nil or wire.Value == nil then
+		return nil
 	end
 
-	local maskWire = wireNamed(node, SDF_MASK_WIRE)
-	if maskWire == nil or maskWire.Value == nil then
-		return nil, distance
-	end
-
-	local grid = ctx.evaluateNode(maskWire.Value, volumes, terrain, ctx.debugString)
-	if not SDFGrid2D.is(grid) then
+	local texture = ctx.evaluateNode(wire.Value, volumes, terrain, ctx.debugString)
+	if not Texture2D.is(texture) then
 		warn(
-			"Node " .. node.Name .. ": its SDF Mask wire points at " .. maskWire.Value.Name
-				.. ", which does not produce a distance field, so nothing is masked."
+			"Node " .. node.Name .. ": its Density wire points at " .. wire.Value.Name
+				.. ", which does not produce a texture, so the scatter was not thinned."
 		)
-		return nil, distance
+		return nil
 	end
 
-	return grid, distance
+	return texture
 end
 
--- Drops every point the mask rejects: one standing nearer the masked shape than
--- `distance`. On the shape the field reads negative, so any distance at all keeps
--- points off it, and a negative distance allows them that far in. The field is
--- flat, so a point is measured by where it stands rather than by how high it is,
--- and masking before or after a snap comes to the same thing. A node with no field
--- wired to it masks nothing.
-function M.maskPoints(points: { Vector3 }, mask: SDFGrid2D.Grid?, distance: number): { Vector3 }
-	if mask == nil then
+--[[
+	Thins `points` out by the texture: each one survives with the chance the texture
+	reads where it stands, so white ground keeps everything, black ground keeps
+	nothing and mid grey keeps about half.
+
+	The texture is flat, so a point is measured by the ground it stands over rather
+	than by how high it is, and thinning before or after a snap comes to the same
+	thing. A node with no texture wired to it keeps everything.
+
+	The roll is the same one the slope curve makes when it thins a scatter by
+	steepness: the global generator, which the scattering nodes seed, so a graph run
+	twice over unchanged ground thins out the same way twice.
+]]
+function M.filterByDensity(points: { Vector3 }, density: Texture2D.Texture?): { Vector3 }
+	if density == nil then
 		return points
 	end
 
 	local kept = {}
 	for _, point in points do
-		if SDFGrid2D.sample(mask, point) >= distance then
+		if math.random() < Texture2D.sample(density, point) then
 			table.insert(kept, point)
 		end
 	end
