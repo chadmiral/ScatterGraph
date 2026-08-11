@@ -65,6 +65,28 @@ function Texture2D.fromCells(layout: GridLayout2D.Layout, values: { number }): T
 	}
 end
 
+--[[
+	A texture of one flat shade, which is how a single number reaches something
+	that reads an image: a Number wired to a Density slot is that chance over the
+	whole of the ground rather than a pattern across it.
+
+	Filled cell by cell rather than kept as the one value it is, so that it is the
+	same shape of thing as every other texture. What reads one has no idea where it
+	came from, and a flat density is rare enough not to be worth a second kind of
+	texture for everything to know about.
+]]
+function Texture2D.uniform(layout: GridLayout2D.Layout, value: number): Texture
+	local everywhere = clamped(value)
+
+	return {
+		origin = layout.origin,
+		voxelSize = layout.voxelSize,
+		resolution = layout.resolution,
+		dimensions = GridLayout2D.dimensions(layout),
+		values = table.create(layout.resolution.X * layout.resolution.Y, everywhere),
+	}
+end
+
 -- A texture filled by asking `valueAt` for every cell centre, by world X and Z.
 -- The way in for anything that knows its value at a position rather than cell by
 -- cell -- noise, say, which has a value everywhere and only becomes an image here.

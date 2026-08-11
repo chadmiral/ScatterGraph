@@ -95,6 +95,20 @@ A **Number** port left unwired stands at its own default rather than at nothing,
 
 The Graph View draws every port in its type's colour — filled when something is wired to it, a ring of the same colour when nothing is — so what a wire may join reads off the canvas. A wire dropped on a slot that takes another type is refused with a warning, and one dropped on the body of a node goes to whichever of its slots takes what is being dragged. A node type the plugin does not recognise has no type, is drawn grey, and has no slots.
 
+#### Conversions
+
+One kind of thing may be wired into a slot that takes another where it has an obvious reading as one, and the reading is made on the way in:
+
+| Wired | Into a slot taking | Read as |
+|-------|--------------------|---------|
+| **Number** | **Texture 2D** | A texture of that one flat shade — the same value over the whole grid |
+
+That is how a density is set to a flat figure: wire a [`Number`](#number) of `0.25` into a [`Density`](#density-masking) slot and a quarter of that rule's candidates survive, everywhere, with no pattern to it. Wire the same `Number` into several rules and they thin out together, and changing the one node changes all of them. Values outside 0 to 1 clamp, as they do in any texture, so `2` is white and `-1` is black.
+
+**A wire making a conversion is drawn as a gradient** from the colour of what it comes out of to the colour of what it goes into — violet to salmon, for the one above. Every other wire is a neutral grey line, since the ports at its two ends already say what it carries, so colour along a wire means a conversion is happening and nothing else.
+
+Nothing converts the other way: a texture read as a single number would have to choose which of its cells to believe, and that choice belongs to a node rather than to a wire.
+
 Which node produces which type, and which slots each one reads, lives in `src/shared/ScatterGraph/DataTypes.luau`. Evaluation itself does not check types: a node reads its input by wire name and takes whatever the upstream node returned.
 
 ### The grid
@@ -201,7 +215,7 @@ Generates an initial point cloud using a simplified Poisson-disc grid: one jitte
 
 | Wire | Required | Description |
 |------|----------|-------------|
-| **`Density`** | No | A [density texture](#density-masking) thinning the candidates out. Nothing wired keeps them all. |
+| **`Density`** | No | A [density texture](#density-masking) thinning the candidates out, or a [`Number`](#conversions) to thin them by a flat fraction. Nothing wired keeps them all. |
 
 **Output:** `{ Vector3 }` — world-space positions, at the middle of the volume group's vertical span until something snaps them.
 
@@ -222,7 +236,7 @@ For each point from upstream, generates up to **`Count`** additional points in a
 | Wire | Required | Description |
 |------|----------|-------------|
 | **`Points`** | Yes | Upstream node (typically **`ScatterPoints`**). |
-| **`Density`** | No | A [density texture](#density-masking) thinning the cluster points out. Nothing wired keeps them all. |
+| **`Density`** | No | A [density texture](#density-masking) thinning the cluster points out, or a [`Number`](#conversions) to thin them by a flat fraction. Nothing wired keeps them all. |
 
 **Output:** `{ Vector3 }` — cluster offset points only (does **not** pass through upstream seed positions; generates **`Count`** new points per upstream seed).
 
@@ -245,7 +259,7 @@ Raycasts each point downward through the scatter volume to find terrain. Snaps s
 | Wire | Required | Description |
 |------|----------|-------------|
 | **`Points`** | Yes | Upstream node providing candidate positions. |
-| **`Density`** | No | A [density texture](#density-masking) thinning the snapped points out. Nothing wired keeps them all. |
+| **`Density`** | No | A [density texture](#density-masking) thinning the snapped points out, or a [`Number`](#conversions) to thin them by a flat fraction. Nothing wired keeps them all. |
 
 **Output:** `{ Vector3 }` — terrain-snapped, filtered positions, all inside the volume.
 
@@ -354,6 +368,8 @@ Source node. Holds one number and hands it to everything wired to it. There is n
 **Inputs:** None (source node).
 
 **Output:** a [Number](#data-types). A node with no **`Value`** set produces nothing and warns; a slot reading it falls back to its own default.
+
+It may also be wired straight into a **`Density`** slot, where it is [read as a texture](#conversions) of that one shade and thins the rule by a flat fraction everywhere.
 
 ---
 
@@ -503,11 +519,13 @@ The roll is the same one the [slope filter](#snappointstoterrain) makes, drawn f
 | **`SnapPointsToTerrain`** | What survived the snap's own material and slope filters | Same answer as reading it earlier, over fewer points |
 | **`ScatterPointsAroundPoints`** | The cluster points, not the seeds they grew from | A seed may stand on black ground and still spread points onto white |
 
-An empty **`Density`** port thins nothing, and so does one wired to a node that does not produce a texture — that warns and carries on. **Nothing wired keeps everything**, which is the opposite of what an all-black texture does, so a mistake fails towards a scatter that is too dense rather than one that has vanished.
+An empty **`Density`** port thins nothing, and so does one wired to a node that produces neither a texture nor a number — that warns and carries on. **Nothing wired keeps everything**, which is the opposite of what an all-black texture does, so a mistake fails towards a scatter that is too dense rather than one that has vanished.
 
 Each texture is built once per evaluation however many rules read it.
 
 **Making one:** [`SDFThreshold2D`](#sdfthreshold2d) cuts a [distance field](#materialsdf2d) into black and white — keep off the water, hold a clearing around the road. [`NoiseTexture2D`](#noisetexture2d) fills one with soft blotches to break a scatter up. Wiring both, on two nodes of one chain, gives patchy ground cover that also respects the roads.
+
+**A flat one:** a [`Number`](#number) wired straight into a **`Density`** port is [read as a texture](#conversions) of that one shade, which thins a rule by a fixed fraction everywhere — `0.3` keeps about a third of its candidates, wherever they stand. It is the simplest way to make one rule sparser without touching its spacing, and one `Number` wired into several rules thins them all together.
 
 ---
 

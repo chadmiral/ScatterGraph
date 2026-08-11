@@ -959,13 +959,15 @@ local function create(pluginRef: Plugin)
 	-- parameter panel beside it: the segment is cut to what is on screen here
 	-- instead, which a frame at any angle obeys because it is only ever asked to
 	-- draw the part that fits.
-	local function drawLine(line: Frame, from: Vector2, to: Vector2)
+	-- Returns the piece it drew, for a caller that has to know how much of the wire
+	-- that was: a gradient along one has to be cut to the same piece.
+	local function drawLine(line: Frame, from: Vector2, to: Vector2): (Vector2?, Vector2?)
 		local low, high = visibleBounds()
 		local start, finish = clipSegment(from, to, low, high)
 
 		if start == nil or finish == nil then
 			line.Visible = false
-			return
+			return nil, nil
 		end
 
 		line.Visible = true
@@ -976,6 +978,22 @@ local function create(pluginRef: Plugin)
 		-- Off the whole wire's direction rather than the visible piece's, which
 		-- is the same heading but degenerates when the piece has no length.
 		line.Rotation = math.deg(math.atan2(to.Y - from.Y, to.X - from.X))
+		return start, finish
+	end
+
+	-- The sweep along a wire that converts what it carries, cut to the piece of the
+	-- wire actually on screen. The frame is turned to face along the wire, so the
+	-- gradient runs from the source end to the target end without being told which
+	-- way that is; what it does have to be told is where the visible piece begins
+	-- and ends along the whole, or a wire mostly off the edge would show the whole
+	-- sweep across the little of it that is left.
+	local function paintCast(wire, from: Vector2, to: Vector2, start: Vector2, finish: Vector2)
+		local length = (to - from).Magnitude
+		local at = if length > 0 then (start - from).Magnitude / length else 0
+		local ends = if length > 0 then (finish - from).Magnitude / length else 1
+
+		wire.gradient.Color =
+			ColorSequence.new(wire.castFrom:Lerp(wire.castTo, at), wire.castFrom:Lerp(wire.castTo, ends))
 	end
 
 	layoutWires = function()
@@ -983,7 +1001,12 @@ local function create(pluginRef: Plugin)
 			local from = outputPortCenter(wire.from)
 			local to = inputPortCenter(wire.to, wire.index)
 
-			drawLine(wire.line, from, to)
+			local start, finish = drawLine(wire.line, from, to)
+
+			if wire.gradient ~= nil and start ~= nil and finish ~= nil then
+				paintCast(wire, from, to, start, finish)
+			end
+
 			wire.breaker.Position = UDim2.fromOffset((from.X + to.X) / 2, (from.Y + to.Y) / 2)
 		end
 	end
@@ -1221,12 +1244,13 @@ local function create(pluginRef: Plugin)
 			return
 		end
 
-		-- A slot takes one kind of thing, and this is the gesture that would put
-		-- the wrong one in it. The ports say as much in their colours; a drop
-		-- aimed at one anyway is turned down rather than quietly making a wire
-		-- the node it feeds cannot read.
+		-- A slot takes one kind of thing -- or something with an obvious reading as
+		-- that kind of thing, a number wired to a texture slot being read as that
+		-- shade everywhere -- and this is the gesture that would put something else
+		-- in it. The ports say as much in their colours; a drop aimed at one anyway
+		-- is turned down rather than quietly making a wire the node cannot read.
 		local produced = DataTypes.producedBy(source)
-		if produced ~= nil and port.dataType ~= nil and produced ~= port.dataType then
+		if not DataTypes.accepts(produced, port.dataType) then
 			warn("ScatterGraph Graph view: " .. source.Name .. " produces " .. DataTypes.label(produced)
 				.. " and the " .. port.name .. " slot on " .. target.Name .. " takes "
 				.. DataTypes.label(port.dataType) .. ", so the connection was not made.")
@@ -1328,6 +1352,15 @@ local function create(pluginRef: Plugin)
 							if port.dataType == dataType then
 								-- Which of a repeated slot's ports the drop takes
 								-- is still the question the fallback answers.
+								return node, if port.slot.repeated then fallback else port
+							end
+						end
+
+						-- Failing that, a slot this would be read into on the way
+						-- in. Still a better answer than the first slot on the
+						-- card, which is one the drop could not be wired to at all.
+						for _, port in ports do
+							if DataTypes.converts(dataType, port.dataType) then
 								return node, if port.slot.repeated then fallback else port
 							end
 						end
@@ -2088,12 +2121,21 @@ local function create(pluginRef: Plugin)
 			local connected = entry.wire ~= nil and entry.wire.Value ~= nil
 			local port = makePort(frame, Vector2.new(0, top + PORT_ROW / 2), connected, entry.dataType)
 
+			-- What else the slot will take, said here because nothing else on the
+			-- canvas offers it: the port is the colour of the one type it is, and a
+			-- conversion only shows itself once a wire making one has been drawn.
+			local alsoReads = ""
+			for _, readable in DataTypes.readInto(entry.dataType) do
+				alsoReads ..= " A " .. DataTypes.label(readable) .. " may be wired here too, and is read as one."
+			end
+
 			overlay.watchForTooltip(
 				port,
 				if entry.isNew
 					then "An empty slot. Drop a wire here to register another rule with this Output."
 					else "The " .. DataTypes.label(entry.dataType)
 						.. " this node reads. Drop a wire from another node's right-hand port here to change it."
+						.. alsoReads
 			)
 		end
 
@@ -2132,6 +2174,24 @@ local function create(pluginRef: Plugin)
 		line.BorderSizePixel = 0
 		line.Parent = wireLayer
 
+		-- A wire that is read into something else on the way in says so, by running
+		-- from the colour of what it comes out of to the colour of what it goes
+		-- into. Every other wire is a neutral line -- the ports at its ends say what
+		-- it carries, and a canvas of coloured wires would say it several dozen
+		-- times over -- so colour along a wire means a conversion and nothing else.
+		local produced = DataTypes.producedBy(source)
+		local gradient = nil
+
+		if DataTypes.converts(produced, port.dataType) then
+			gradient = Instance.new("UIGradient")
+			-- A gradient tints what it is on, so the line underneath is white for
+			-- the two type colours to come out as themselves. The colours are set
+			-- as the wire is laid out, which is what cuts the sweep to the piece of
+			-- it on screen.
+			line.BackgroundColor3 = Color3.new(1, 1, 1)
+			gradient.Parent = line
+		end
+
 		local breaker = Instance.new("TextButton")
 		breaker.AnchorPoint = Vector2.new(0.5, 0.5)
 		breaker.Size = UDim2.fromOffset(BREAK_SIZE, BREAK_SIZE)
@@ -2152,7 +2212,16 @@ local function create(pluginRef: Plugin)
 		carryDrag(breaker)
 		overlay.watchForTooltip(breaker, "Click to break this connection.")
 
-		table.insert(wires, { line = line, breaker = breaker, from = source, to = target, index = index })
+		table.insert(wires, {
+			line = line,
+			breaker = breaker,
+			from = source,
+			to = target,
+			index = index,
+			gradient = gradient,
+			castFrom = DataTypes.color(produced),
+			castTo = DataTypes.color(port.dataType),
+		})
 	end
 
 	local function watchGraph(nodes: { Instance })

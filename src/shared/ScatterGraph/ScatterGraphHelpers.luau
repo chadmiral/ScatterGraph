@@ -4,6 +4,7 @@ local VolumeShape = require(script.Parent:WaitForChild("VolumeShape"))
 local PlacementStamp = require(script.Parent:WaitForChild("PlacementStamp"))
 local PlacementLedger = require(script.Parent:WaitForChild("PlacementLedger"))
 local Texture2D = require(script.Parent:WaitForChild("Texture2D"))
+local GridLayout2D = require(script.Parent:WaitForChild("GridLayout2D"))
 
 local M = {}
 
@@ -464,8 +465,8 @@ end
 --[[
 	The density texture wired to a node's Density slot, or nothing where that slot
 	is empty -- which is not a mistake, since most nodes scatter evenly and have no
-	texture at all. A slot wired to something that does not produce a texture is a
-	mistake, and is said once per evaluation.
+	texture at all. A slot wired to something that produces neither a texture nor a
+	number is a mistake, and is said once per evaluation.
 
 	Read here rather than in each node, since all three scattering nodes take the
 	same slot and would otherwise say so three times.
@@ -476,16 +477,25 @@ function M.readDensity(node: Instance, volumes, terrain, ctx): Texture2D.Texture
 		return nil
 	end
 
-	local texture = ctx.evaluateNode(wire.Value, volumes, terrain, ctx.debugString)
-	if not Texture2D.is(texture) then
+	local produced = ctx.evaluateNode(wire.Value, volumes, terrain, ctx.debugString)
+
+	-- A number read as the texture it plainly means: that chance everywhere,
+	-- rather than a pattern. This is the graph view's Number-to-texture conversion
+	-- being made -- the canvas allows the wire and draws it as a sweep between the
+	-- two colours; here is where the reading actually happens.
+	if typeof(produced) == "number" then
+		return Texture2D.uniform(ctx.gridLayout or GridLayout2D.layoutFor(volumes), produced)
+	end
+
+	if not Texture2D.is(produced) then
 		warn(
 			"Node " .. node.Name .. ": its Density wire points at " .. wire.Value.Name
-				.. ", which does not produce a texture, so the scatter was not thinned."
+				.. ", which produces neither a texture nor a number, so the scatter was not thinned."
 		)
 		return nil
 	end
 
-	return texture
+	return produced
 end
 
 --[[

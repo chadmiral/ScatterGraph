@@ -19,10 +19,17 @@
 	  distance being the first of them. A number port left unwired stands at its
 	  own default rather than at nothing.
 
-	None of them are interchangeable -- a filter has nothing to say about a
+	Mostly they are not interchangeable -- a filter has nothing to say about a
 	placed model, and the Output registry has nothing to place a bare point with
 	-- so a port says which of them it is, in the one colour that means that
 	everywhere it is drawn.
+
+	Where one kind of thing does have an obvious reading as another, though,
+	wiring it across is allowed and the reading is made on the way in: a number
+	dropped on a slot that takes a texture is that value everywhere, an image of
+	one flat shade. Those conversions are listed in CASTS below, and a wire making
+	one is drawn as a sweep from the colour of what it comes out of to the colour
+	of what it goes into, so the canvas says where a reading is being made.
 
 	Reroute is the exception, and the reason a type is worked out here rather
 	than looked up: it carries whichever of them is wired into it, so what it
@@ -143,6 +150,23 @@ local INPUTS: { [string]: { Slot } } = {
 	},
 }
 
+--[[
+	What may be wired into a slot that takes something else, by what the slot
+	takes: the conversions with one obvious reading, made where the thing is read
+	rather than here.
+
+	A number becomes a texture of that one shade, which is how a density is set to
+	a flat value -- half a chance over the whole biome -- and how one Number can
+	set that for several rules at once.
+
+	Nothing converts the other way. A texture read as a single number would have to
+	choose which of its cells to believe, and the choice would be the node's rather
+	than the wire's.
+]]
+local CASTS: { [DataType]: { [DataType]: boolean } } = {
+	[NUMBER] = { [TEXTURE_2D] = true },
+}
+
 -- Fixed rather than theme colours, for the same reason the title bars are: they
 -- say what kind of data this is, not which part of the window it is. Bright
 -- enough to read at ten pixels against either Studio theme's card.
@@ -173,6 +197,49 @@ end
 
 function DataTypes.label(dataType: DataType?): string
 	return if dataType ~= nil then LABELS[dataType] or "data" else "data"
+end
+
+-- Would a wire from something producing `produced` into a slot taking `wanted` be
+-- read on the way in? False for a slot fed exactly what it takes, which is read as
+-- itself, and false for a pairing with no reading at all.
+function DataTypes.converts(produced: DataType?, wanted: DataType?): boolean
+	if produced == nil or wanted == nil or produced == wanted then
+		return false
+	end
+
+	local readings = CASTS[produced]
+	return readings ~= nil and readings[wanted] == true
+end
+
+-- What else a slot taking `wanted` will read, for the tooltip that offers it.
+-- Sorted, since a table's own order is not one and a tooltip that reorders itself
+-- between two openings reads as two different tooltips.
+function DataTypes.readInto(wanted: DataType?): { DataType }
+	local found = {}
+
+	if wanted ~= nil then
+		for produced, readings in CASTS do
+			if readings[wanted] then
+				table.insert(found, produced)
+			end
+		end
+
+		table.sort(found)
+	end
+
+	return found
+end
+
+-- May a wire be drawn at all: the slot takes exactly this, or takes something this
+-- converts into. A nil at either end is one that says nothing about what it is --
+-- an empty reroute's slot, or a node type this module has never heard of -- and
+-- what cannot be told apart is not turned down.
+function DataTypes.accepts(produced: DataType?, wanted: DataType?): boolean
+	if produced == nil or wanted == nil then
+		return true
+	end
+
+	return produced == wanted or DataTypes.converts(produced, wanted)
 end
 
 -- A node's type as this module reads it: the NodeType attribute, when it is
