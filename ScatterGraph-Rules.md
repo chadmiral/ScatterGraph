@@ -101,7 +101,9 @@ A **Number** port left unwired stands at its own default rather than at nothing,
 
 [`Reroute`](#reroute) is not in that table because it has no type of its own: it produces whatever is wired into it, and the dot it is drawn as takes that type's colour once something is.
 
-The Graph View draws every port in its type's colour — filled when something is wired to it, a ring of the same colour when nothing is — so what a wire may join reads off the canvas. A wire dropped on a slot that takes another type is refused with a warning, and one dropped on the body of a node goes to whichever of its slots takes what is being dragged. A node type the plugin does not recognise has no type, is drawn grey, and has no slots.
+The Graph View draws every port in its type's colour — filled when something is wired to it, a ring of the same colour when nothing is — so what a wire may join reads off the canvas. **A wire is drawn in the colour of what it carries too**, matching the ports at both of its ends, so a glance at a graph says which parts of it are moving points about and which are moving geometry, without following any line to the end of it. A wire out of a node carrying nothing yet — an empty [`Reroute`](#reroute) — is drawn in the grey an unknown type gets, and takes a colour as soon as something reaches it.
+
+A wire dropped on a slot that takes another type is refused with a warning, and one dropped on the body of a node goes to whichever of its slots takes what is being dragged. A node type the plugin does not recognise has no type, is drawn grey, and has no slots.
 
 #### Conversions
 
@@ -113,7 +115,7 @@ One kind of thing may be wired into a slot that takes another where it has an ob
 
 That is how a density is set to a flat figure: wire a [`Number`](#number) of `0.25` into a [`Density`](#density-masking) slot and a quarter of that rule's candidates survive, everywhere, with no pattern to it. Wire the same `Number` into several rules and they thin out together, and changing the one node changes all of them. Values outside 0 to 1 clamp, as they do in any texture, so `2` is white and `-1` is black.
 
-**A wire making a conversion is drawn as a gradient** from the colour of what it comes out of to the colour of what it goes into — violet to salmon, for the one above. Every other wire is a neutral grey line, since the ports at its two ends already say what it carries, so colour along a wire means a conversion is happening and nothing else.
+**A wire making a conversion is drawn as a gradient** from the colour of what it comes out of to the colour of what it goes into — violet to salmon, for the one above. Every other wire is one flat colour, so a wire that changes colour along its length is a conversion and nothing else is.
 
 Nothing converts the other way: a texture read as a single number would have to choose which of its cells to believe, and that choice belongs to a node rather than to a wire.
 

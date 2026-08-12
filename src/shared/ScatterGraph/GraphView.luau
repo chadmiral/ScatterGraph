@@ -1794,10 +1794,9 @@ local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 	local function beginWireDrag(node: Instance)
 		clearPendingWire()
 
-		-- The trail out of a port is drawn in that port's type colour, being the
-		-- same thing being carried; a wire already made is a neutral line, since
-		-- the ports at its ends say what it is and a canvas of coloured wires
-		-- would say it several dozen times over.
+		-- The trail out of a port is drawn in that port's type colour, which is
+		-- the colour the wire will be if the drop lands: a connection looks the
+		-- same while it is being made as it does once it is made.
 		local line = Instance.new("Frame")
 		line.AnchorPoint = Vector2.new(0.5, 0.5)
 		line.BackgroundColor3 = DataTypes.color(DataTypes.producedBy(node))
@@ -2403,15 +2402,19 @@ local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 	local function makeWireBetween(source: Instance, target: Instance, index: number, port)
 		local line = Instance.new("Frame")
 		line.AnchorPoint = Vector2.new(0.5, 0.5)
-		line.BackgroundColor3 = color(Enum.StudioStyleGuideColor.DimmedText)
 		line.BorderSizePixel = 0
 		line.Parent = wireLayer
 
-		-- A wire that is read into something else on the way in says so, by running
-		-- from the colour of what it comes out of to the colour of what it goes
-		-- into. Every other wire is a neutral line -- the ports at its ends say what
-		-- it carries, and a canvas of coloured wires would say it several dozen
-		-- times over -- so colour along a wire means a conversion and nothing else.
+		-- A wire is the colour of what it carries, the same colour as the ports at
+		-- its two ends, so what is flowing where reads off the canvas from across
+		-- the room rather than by following a grey line to the port it lands on.
+		-- A wire out of a node that carries nothing yet -- an empty reroute -- has
+		-- no colour to be, and is the grey an unknown type is drawn in.
+		--
+		-- A wire that is read into something else on the way in runs from the
+		-- colour of what it comes out of to the colour of what it goes into, so the
+		-- conversion is visible as the one place on the canvas where a wire changes
+		-- colour along its length.
 		local produced = DataTypes.producedBy(source)
 		local gradient = nil
 
@@ -2423,6 +2426,8 @@ local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 			-- it on screen.
 			line.BackgroundColor3 = Color3.new(1, 1, 1)
 			gradient.Parent = line
+		else
+			line.BackgroundColor3 = DataTypes.color(produced)
 		end
 
 		local breaker = Instance.new("TextButton")
