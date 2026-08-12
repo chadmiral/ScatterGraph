@@ -14,7 +14,7 @@ This document describes every node type, attribute, wire, tag, and volume settin
 4. It finds children of the graph root with **`NodeType`** = **`Output`** and evaluates each one.
 5. **`Output`** nodes follow **`ObjectValue`** wires to terminal **`PlaceGeometryOnPoints`** nodes, or to a pass-through node standing in front of one.
 6. Each node walks upstream through **`Points`** wires until it reaches a source **`ScatterPoints`** node. The rule being evaluated and the grid go down with the call, so every node in a chain sees them. A chain is a line unless it holds a [merge](#mergepoints), which reads several of them and hands on all of it as one.
-7. Points pass through optional filters (exclusion volumes, terrain snap, slope/material filters) before geometry is cloned.
+7. Points pass through optional filters (exclusion volumes, terrain snap, slope/material filters) before geometry is cloned, and may have their [rotation, scale or position](#what-a-point-carries) settled on the way by one of the range nodes.
 
 **Registered node types** (the `NodeType` attribute must match exactly):
 
@@ -24,6 +24,11 @@ This document describes every node type, attribute, wire, tag, and volume settin
 | `ScatterPoints` | Generates initial point cloud |
 | `ScatterPointsAroundPoints` | Expands each upstream point into a local cluster. Called **Cluster** in both windows |
 | `SnapPointsToTerrain` | Raycasts to terrain; filters by slope and material |
+| `SetRotationRange` | Turns every point to somewhere between two rotations, axis by axis |
+| `SetScaleRange` | Sizes every point somewhere between two numbers |
+| `SetTranslationOffsetRange` | Moves every point by a random offset between two vectors |
+| `Vector3` | Holds one 3D vector for other nodes to read |
+| `Rotation` | Holds one turn, typed as angles and handed on as a quaternion |
 | `MaterialSDF2D` | Measures how far every spot of ground under the volumes is from named terrain materials, seen from above |
 | `SDFThreshold2D` | Cuts a distance field at a distance, giving a density texture that is white beyond it and black within |
 | `NoiseTexture2D` | Fills a density texture with Perlin noise, to break a scatter up in soft patches |
@@ -78,10 +83,14 @@ The folder is an organising convention, not something evaluation depends on: nod
 | `Points` | `ObjectValue` | `Points` | Upstream node that feeds this node |
 | `Instances` | `ObjectValue` (on `ParentInstancesTo` only) | `Instances` | Upstream node whose placements it moves |
 | *(named after the node it comes from)* | `ObjectValue` (on a [merge](#mergepoints) only) | `Points` or `Instances` | One of the several nodes that merge reads |
+| `A`, `B` | `ObjectValue` (on a [range node](#the-two-ends-of-a-range) only) | `Rotation`, `Vector3` or `Number` | The two ends the node varies every point between, where they are not [typed on the node itself](#the-two-ends-of-a-range) |
+| `SDF` | `ObjectValue` (on `SDFThreshold2D` only) | `SDFGrid2D` | The distance field it cuts |
+| `Distance` | `ObjectValue` (on `SDFThreshold2D` only) | `Number` | Where the cut falls |
+| `Density` | `ObjectValue` (on a point-producing node) | `Texture2D` | The texture that [thins the scatter](#density-masking) |
 | `Asset` | `ObjectValue` (on `PlaceGeometryOnPoints` only) | `Asset` | In-scene template to clone (optional) |
 | `Parent` | `ObjectValue` (on `ParentInstancesTo` only) | `Parent` | Where in the hierarchy that node moves instances to |
 
-**`Points`**, **`Instances`** and a merge's inputs are edges between two nodes, and are ports on the canvas. **`Asset`** and **`Parent`** are references into the scene, and are rows in the parameter panel.
+Everything above except **`Asset`** and **`Parent`** is an edge between two nodes, and is a port on the canvas. Those two are references into the scene, and are rows in the parameter panel.
 
 A merge's inputs are the one case where **the wire's name is not fixed**: there is a wire per input rather than a declared slot to fill, so each is named after the node it comes from (`ScatterPoints`, `ScatterPoints2`) exactly as an [`Output`](#output-registry) entry is named after its rule. Nothing reads those names but the canvas, which lists them in alphabetical order and merges them in that order too.
 
@@ -91,13 +100,32 @@ A wire between two nodes carries one of these kinds of thing, and each end of it
 
 | Data type | What it is | Produced by | Read by | Port colour |
 |-----------|------------|-------------|---------|-------------|
-| **Points** | A cloud of positions | `ScatterPoints`, `ScatterPointsAroundPoints`, `SnapPointsToTerrain`, `MergePoints` | `ScatterPointsAroundPoints`, `SnapPointsToTerrain`, `MergePoints`, `PlaceGeometryOnPoints` | Blue |
+| **Points** | A cloud of [points](#what-a-point-carries), each with a position, a rotation and a scale | `ScatterPoints`, `ScatterPointsAroundPoints`, `SnapPointsToTerrain`, `MergePoints`, `SetRotationRange`, `SetScaleRange`, `SetTranslationOffsetRange` | the same seven, less `ScatterPoints`, plus `PlaceGeometryOnPoints` | Blue |
 | **Instances** | The geometry a rule has placed in the world | `PlaceGeometryOnPoints`, `ParentInstancesTo`, `MergeInstances` | `ParentInstancesTo`, `MergeInstances`, `Output` | Green |
 | **SDF Grid 2D** | A shape on the ground measured onto a rectangle of cells as the signed distance to its edge, seen from above | `MaterialSDF2D` | `SDFThreshold2D` | Yellow |
 | **Texture 2D** | A greyscale image laid over the ground, read as [how much of a scatter survives where](#density-masking) | `SDFThreshold2D`, `NoiseTexture2D` | `ScatterPoints`, `ScatterPointsAroundPoints`, `SnapPointsToTerrain` | Salmon |
-| **Number** | A single value | `Number` | `SDFThreshold2D` | Violet |
+| **Number** | A single value | `Number` | `SDFThreshold2D`, `SetScaleRange` | Violet |
+| **3D Vector** | Three numbers: an offset, a lift | `Vector3` | `SetTranslationOffsetRange` | Teal |
+| **Rotation** | A turn, held as a quaternion together with the angles it was authored from | `Rotation` | `SetRotationRange` | Pink |
 
-A **Number** port left unwired stands at its own default rather than at nothing, so wiring one is a way to make several nodes agree on a value, not a requirement.
+A **Number**, **3D Vector** or **Rotation** port left unwired stands at whatever the node itself says, so wiring one is a way to make several nodes agree on a value, not a requirement. The three range nodes are the clearest case: their **`A`** and **`B`** can be typed on the card, and a wire outranks what is typed there — see [the range nodes](#setrotationrange).
+
+### What a point carries
+
+A point is three things, and every node that makes one starts it at the two that mean nothing has happened yet:
+
+| Part | Starts at | Set by | Read by |
+|------|-----------|--------|---------|
+| Position | Where it was scattered | [`SnapPointsToTerrain`](#snappointstoterrain), [`SetTranslationOffsetRange`](#settranslationoffsetrange) | Everything: densities, slope filters, exclusion volumes and placement all measure a point by where it stands |
+| Rotation | No turn | [`SetRotationRange`](#setrotationrange) | [`PlaceGeometryOnPoints`](#placegeometryonpoints), which turns the geometry it clones by it |
+| Scale | Full size, `1` | [`SetScaleRange`](#setscalerange) | [`PlaceGeometryOnPoints`](#placegeometryonpoints), which scales the geometry it clones to it |
+
+Only the position is anybody else's business. A density is read off the ground a point stands over whatever way it is facing, a slope filter off the ground under it, and an exclusion volume from whether that spot is inside it — so adding a rotation or a scale to a chain changes what is placed and nothing about what survives.
+
+A point's scale is one number rather than three because Roblox scales a model about its pivot, evenly, and there is no such thing as a model stretched along one axis. Two things follow from a point carrying its own turn and size at all:
+
+- **A [cluster](#scatterpointsaroundpoints) inherits its seed's rotation and scale**, being that seed spread out. Set either before a cluster and the whole clump gets it; set it after and the clump's points get their own.
+- **The random stream is shared.** Every node that draws per point draws from the one stream the scatter at the head of the chain seeded, so inserting a range node into an existing chain shifts every draw made after it: the props downstream will not come out identical to how they were. That is true of any node added mid-chain, and is what makes a run reproducible in the first place.
 
 [`Reroute`](#reroute) is not in that table because it has no type of its own: it produces whatever is wired into it, and the dot it is drawn as takes that type's colour once something is.
 
@@ -303,11 +331,110 @@ No attributes: how many inputs it has is said by the wires themselves.
 
 **Inputs are made as they are wired,** like the [`Output`](#output-registry) registry's entries rather than like a declared slot. The card carries a port per input and an empty **(add points)** port under them; dropping a wire on the empty one adds an input, and breaking a wire removes that input's port rather than leaving it empty. Dropping a wire anywhere on the body of the card adds an input too.
 
-**Output:** a [Points](#data-types) cloud holding every point from every input, in the order the card lists them — alphabetically by input name. The order matters only in that it has to be settled: each point in turn draws from the run's random stream for its scale and rotation, so an order that changed between runs would reshuffle the placement.
+**Output:** a [Points](#data-types) cloud holding every point from every input, in the order the card lists them — alphabetically by input name. The order matters only in that it has to be settled: everything downstream that varies a point — a [range node](#the-two-ends-of-a-range), a tint — draws for each in turn from the run's random stream, so an order that changed between runs would reshuffle the placement.
 
 **Points are not compared as they are merged.** Two clouds over the same ground are two points wherever they land in the same spot, and the spacing a scatter is built to is its own: two scatters at 40 studs merged into one are 40 studs apart within each cloud and as close as they like between them. For spacing *between* merged clouds, see [`AvoidIntersections`](#cross-branch-intersection-avoidance) on the terminal.
 
 **Two inputs pointing at the same node** is read once, with a warning — reading it twice would not give the same answer twice over, since a scatter thinned by a density draws from the random stream as it goes. Two inputs that lead back to the same node *further* upstream is not something the merge can see, and that node is then evaluated once for each way round to it.
+
+---
+
+### The two ends of a range
+
+The three nodes below — [`SetRotationRange`](#setrotationrange), [`SetScaleRange`](#setscalerange) and [`SetTranslationOffsetRange`](#settranslationoffsetrange) — all read a cloud of points and two ends, **`A`** and **`B`**, and hand the cloud on with something drawn between those two ends settled on every point of it. They differ only in what an end is and what settling it does.
+
+**An end can be given two ways: typed on the card, or wired to a port of the same name. The wire wins where it is used,** and the panel greys the row out and marks it *(unused)* while a wire is attached. Both exist because they are wanted at different times: a range only one rule cares about is two boxes and no wiring, which is most of them, and a range several rules must agree on is one [`Number`](#number) or [`Rotation`](#rotation) node wired into each of them, so that changing the one node changes all of them at once.
+
+An end with neither typed nor wired stands at the value that changes nothing — no turn, full size, no offset — which makes a range with one end given a range from that end to nothing happening. A node with neither end given does nothing, and says so.
+
+Each of the three replaces what the point carried, except the offset, which adds to it. All three draw from [the run's shared random stream](#what-a-point-carries), so adding one to an existing chain shifts every draw made after it.
+
+---
+
+### SetRotationRange
+
+Turns every point in a cloud to somewhere between the two rotations at **`A`** and **`B`**, and hands the cloud on. What each point was facing before is replaced rather than added to: this says which way these points face, not which way to turn them from wherever they were.
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **`NodeType`** | `string` | Yes | **`SetRotationRange`** |
+| **`A`** | `Vector3` | No | One end of the turn, in degrees about X, then Y, then Z. Ignored while the **`A`** port is wired. |
+| **`B`** | `Vector3` | No | The other end. Ignored while the **`B`** port is wired. |
+
+| Wire | Required | Description |
+|------|----------|-------------|
+| **`Points`** | Yes | The cloud to turn. More than one may be wired, and they are read as one. |
+| **`A`** | No | One end of the range, as a [`Rotation`](#rotation) node. Outranks the **`A`** attribute. |
+| **`B`** | No | The other end. Outranks the **`B`** attribute. |
+
+**Output:** the same [Points](#data-types), each with its rotation settled. A node with neither end set turns nothing and warns; an end wired to something that is not a rotation stands at no turn and warns.
+
+**Each end can be said twice, and [the wire wins](#the-two-ends-of-a-range).** A fresh node comes set to a full spin about Y, which is what most scatters want of it.
+
+**Each axis is drawn on its own,** between the two ends' angle for that axis. Two ranges worth knowing by heart:
+
+| A | B | What comes out |
+|---|---|----------------|
+| `(0, 0, 0)` | `(0, 360, 0)` | A full random spin about Y, spread evenly over the circle |
+| `(0, 0, 0)` | `(20, 90, 0)` | A lean of up to 20° at any heading within a quarter turn — every pairing of the two, not only those that go together |
+
+**A full turn is a real range, not an empty one,** because a [`Rotation`](#rotation) remembers the angles it was authored from as well as the turn they land on. As a quaternion, `(0, 360, 0)` and `(0, 0, 0)` are the same thing; as authored angles they are 360° apart, and that is what the range is taken between.
+
+The corollary is that a range is between the *numbers typed*, so `(0, 350, 0)` to `(0, 10, 0)` sweeps the long way round through 180° rather than the short way through zero. Write the range the way you want it read.
+
+---
+
+### SetScaleRange
+
+Sizes every point in a cloud somewhere between the two numbers at **`A`** and **`B`**. What each point was before is replaced rather than multiplied by.
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **`NodeType`** | `string` | Yes | **`SetScaleRange`** |
+| **`A`** | `number` | No | One end of the size. Ignored while the **`A`** port is wired. |
+| **`B`** | `number` | No | The other end. Ignored while the **`B`** port is wired. |
+
+| Wire | Required | Description |
+|------|----------|-------------|
+| **`Points`** | Yes | The cloud to size. |
+| **`A`** | No | One end of the range, as a [`Number`](#number) node. Outranks the **`A`** attribute. |
+| **`B`** | No | The other end. Outranks the **`B`** attribute. |
+
+**Output:** the same [Points](#data-types), each with its scale settled.
+
+**One number rather than three,** because a model can only be scaled evenly: Roblox scales it about its pivot, and there is no such thing as a model stretched along one axis. A range in three axes would be a range in two axes nothing could honour.
+
+**This is the only thing that sizes a placement.** Whatever a point carries when it reaches the terminal is the size it is placed at — the terminal has no scale of its own. A fresh node comes set to `0.9` and `1.1`, which is the gentle variation most props want.
+
+**Each end can be said twice, and [the wire wins](#the-two-ends-of-a-range).**
+
+---
+
+### SetTranslationOffsetRange
+
+Moves every point in a cloud by a random offset between the two vectors at **`A`** and **`B`**. Unlike the other two, this adds to what the point already carries.
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **`NodeType`** | `string` | Yes | **`SetTranslationOffsetRange`** |
+| **`A`** | `Vector3` | No | One corner of the offset, in studs. Ignored while the **`A`** port is wired. |
+| **`B`** | `Vector3` | No | The other corner. Ignored while the **`B`** port is wired. |
+
+| Wire | Required | Description |
+|------|----------|-------------|
+| **`Points`** | Yes | The cloud to move. |
+| **`A`** | No | One corner of the offset, as a [`Vector3`](#vector3) node. Outranks the **`A`** attribute. |
+| **`B`** | No | The other corner. Outranks the **`B`** attribute. |
+
+**Output:** the same [Points](#data-types), moved.
+
+**Each axis is drawn on its own,** so an offset between `(-2, 0, -2)` and `(2, 0, 2)` is anywhere in that square rather than on its diagonal.
+
+**Each end can be said twice, and [the wire wins](#the-two-ends-of-a-range).** A fresh node comes set to no movement at either end, there being no offset most rules would want by default.
+
+**Where it sits in the chain is when it happens.** Everything after it sees the moved point, which is what makes it worth having after a [snap](#snappointstoterrain): a scatter dropped onto the terrain and then lifted a couple of studs stands just clear of the ground it was measured against. A snap placed *after* one puts the point back on the ground, and only the horizontal part of the offset survives.
+
+**Moving a point moves what the plugin knows it by.** Hand edits are remembered against where a point stood (see [Persisting hand edits](#persisting-hand-edits)), so changing an offset rehouses that rule's props rather than editing them in place, and edits kept against the old positions are let go.
 
 ---
 
@@ -400,7 +527,7 @@ Once the graph has been run, the node's card in the Graph View shows [the textur
 
 ### Number
 
-Source node. Holds one number and hands it to everything wired to it. There is nothing to compute; the node exists so that a figure several rules depend on — a threshold distance, typically — is one thing in one place rather than the same number typed into each of them. Change the node and every rule reading it changes together.
+Source node. Holds one number and hands it to everything wired to it. There is nothing to compute; the node exists so that a figure several rules depend on — a threshold distance, or how big a prop is allowed to get — is one thing in one place rather than the same number typed into each of them. Change the node and every rule reading it changes together.
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -412,6 +539,38 @@ Source node. Holds one number and hands it to everything wired to it. There is n
 **Output:** a [Number](#data-types). A node with no **`Value`** set produces nothing and warns; a slot reading it falls back to its own default.
 
 It may also be wired straight into a **`Density`** slot, where it is [read as a texture](#conversions) of that one shade and thins the rule by a flat fraction everywhere.
+
+---
+
+### Vector3
+
+Source node. Holds three numbers and hands them to everything wired to it — the [`Number`](#number) node for anything with an X, a Y and a Z. How far a biome's props are allowed to wander off their points, the lift everything in it floats by: one thing in one place rather than the same three figures typed into each rule that wants them.
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **`NodeType`** | `string` | Yes | **`Vector3`** |
+| **`Value`** | `Vector3` | Yes | The vector handed to every wire out of this node. |
+
+**Inputs:** None (source node).
+
+**Output:** a [3D Vector](#data-types). A node with no **`Value`** set produces nothing and warns; the slot reading it falls back to its own default.
+
+---
+
+### Rotation
+
+Source node. Holds one turn and hands it to everything wired to it.
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **`NodeType`** | `string` | Yes | **`Rotation`** |
+| **`Angles`** | `Vector3` | Yes | The turn, in degrees about X, then Y, then Z — the order Studio's own Orientation box reads in, so a number copied out of the Properties pane gives the rotation you were looking at. |
+
+**Inputs:** None (source node).
+
+**Output:** a [Rotation](#data-types). A node with no **`Angles`** set produces nothing and warns.
+
+**A rotation is both the turn and the angles it was asked for.** The turn is a quaternion, which is what a placement needs and what the point carries. The angles are kept beside it exactly as typed, unwrapped, because a quaternion cannot tell a full turn from no turn — `(0, 360, 0)` and `(0, 0, 0)` are the same four numbers — and a [range](#setrotationrange) taken between quaternions alone would read a spin as no spread at all. The two are allowed to disagree: the angles are what was asked for, the quaternion is where it lands.
 
 ---
 
@@ -448,14 +607,12 @@ Nothing to set: what it passes on is whatever is wired into it.
 
 ### PlaceGeometryOnPoints
 
-Terminal node. Clones a template model at each input point, applies scale, optional color tint, and rotation, and parents instances to `Workspace.ScatterGraphInstances`.
+Terminal node. Clones a template model at each input point, turned and sized as that point says, optionally tinted, and parents the instances to `Workspace.ScatterGraphInstances`.
 
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
 | **`NodeType`** | `string` | Yes | **`PlaceGeometryOnPoints`** |
 | **`GeometryAssetID`** | `number` | One of these | Published asset ID. Loaded via `InsertService`; first child is the template. Ignored when **`Asset`** wire is set. |
-| **`ScaleRange`** | `Vector2` | No | Uniform scale range: **`X`** = minimum, **`Y`** = maximum. Sampled as `X + random() * (Y - X)`. Defaults to `1` when omitted. |
-| **`RotationType`** | `string` | No | How to rotate each instance (see below). |
 | **`ColorRange`** | `ColorSequence` | No | Random tint applied to `SurfaceAppearance.Color` on descendant `MeshPart`s. Sampled with `random()` as the sequence time. |
 | **`AvoidIntersections`** | `boolean` | No | When `true`, this rule participates in order-independent intersection avoidance: an instance is dropped if its circular footprint would overlap another rule's footprint. Defaults to `false`. See [Cross-branch intersection avoidance](#cross-branch-intersection-avoidance). |
 | **`Radius`** | `number` | No | Horizontal footprint radius (studs) used for intersection tests. Two placements overlap when the distance between their centers is less than the sum of their radii. Defaults to `5`. |
@@ -466,13 +623,9 @@ Terminal node. Clones a template model at each input point, applies scale, optio
 | **`Points`** | Yes | Upstream node providing placement positions. |
 | **`Asset`** | No | In-scene template instance to clone. Takes precedence over **`GeometryAssetID`**. |
 
-**`RotationType` values:**
+**How a placement is turned and sized is the point's to say, and this node has no say in it.** A clone is pivoted to where its point stands, facing the way [`SetRotationRange`](#setrotationrange) left it, and scaled to what [`SetScaleRange`](#setscalerange) left it at. A point nothing has touched is placed unturned at full size.
 
-| Value | Behavior |
-|-------|----------|
-| `"Random"` | Random rotation on all three axes. |
-| `"UpAxis"` | Random yaw around world Y. |
-| *( omitted or other )* | No rotation applied beyond placement pivot. |
+This node used to draw both itself, from a **`ScaleRange`** and a **`RotationType`** of its own. Those said the same thing in a second place, and only per placement rather than per point, so they are gone: **a graph that still carries either is warned about once a run and the attribute is ignored.** Delete it and put a range node upstream instead — `RotationType` of `UpAxis` is a `SetRotationRange` from `(0, 0, 0)` to `(0, 360, 0)`, `Random` is one to `(360, 360, 360)`, and a `ScaleRange` is the two numbers of a `SetScaleRange`.
 
 **Color tinting:** Applied to `SurfaceAppearance` descendants of each `MeshPart`. Parts tagged **`NoTint`** (CollectionService) are skipped.
 
@@ -759,13 +912,18 @@ A rule that loses a large fraction of its placements between runs — usually a 
 | `ScatterPoints` | `NodeType`, `Seed`, `Spacing` |
 | `ScatterPointsAroundPoints` | `NodeType`, `Seed`, `InnerRadius`, `OuterRadius`, `Count` |
 | `SnapPointsToTerrain` | `NodeType`, `MaterialFilter`, `SlopeFilter` |
+| `SetRotationRange` | `NodeType`, `A`, `B` *(angles in degrees; a wire of the same name outranks either)* |
+| `SetScaleRange` | `NodeType`, `A`, `B` *(numbers; as above)* |
+| `SetTranslationOffsetRange` | `NodeType`, `A`, `B` *(studs; as above)* |
+| `Vector3` | `NodeType`, `Value` |
+| `Rotation` | `NodeType`, `Angles` |
 | `MaterialSDF2D` | `NodeType`, `Materials`, `VoxelSize` |
 | `SDFThreshold2D` | `NodeType` *(both parameters are wires)* |
 | `NoiseTexture2D` | `NodeType`, `Scale`, `Phase`, `VoxelSize` |
 | `Number` | `NodeType`, `Value` |
 | `Reroute` | `NodeType` *(its one input is a wire)* |
 | `MergePoints` | `NodeType` *(one wire per input, however many there are)* |
-| `PlaceGeometryOnPoints` | `NodeType`, `GeometryAssetID`, `ScaleRange`, `RotationType`, `ColorRange`, `AvoidIntersections`, `Radius`, `Priority`, `RuleId` |
+| `PlaceGeometryOnPoints` | `NodeType`, `GeometryAssetID`, `ColorRange`, `AvoidIntersections`, `Radius`, `Priority`, `RuleId` |
 | `ParentInstancesTo` | `NodeType` *(its input and its `Parent` are both wires)* |
 | `MergeInstances` | `NodeType` *(one wire per input, however many there are)* |
 | `Output` registry entry | `NodeType` = `OutputNode` |
@@ -779,6 +937,7 @@ A rule that loses a large fraction of its placements between runs — usually a 
 | Wire: `Input` | `NodeType` = whatever the [reroute](#reroute) carries |
 | Wire: `SDF` | `NodeType` = `SDFGrid2D` |
 | Wire: `Distance` | `NodeType` = `Number` |
+| Wire: `A`, `B` | `NodeType` = `Rotation`, `Vector3` or `Number`, whichever that [range node](#the-two-ends-of-a-range) takes |
 | Wire: a [merge](#mergepoints) input | `NodeType` = `Points` or `Instances`; named after the node it comes from |
 
 A **`PlaceGeometryOnPoints`** node added from a rule template also carries
@@ -802,6 +961,8 @@ lists. Deleting it just returns the node to the automatic column layout.
 |------|------|
 | `src/shared/ScatterGraph/ScatterGraph.client.lua` | Plugin entry; volume grouping, node registry, evaluation loop |
 | `src/shared/ScatterGraph/ScatterGraphHelpers.luau` | Terrain snap, clustering, placement, exclusion zones |
+| `src/shared/ScatterGraph/Point.luau` | One [point](#what-a-point-carries): where it is, which way it faces, how big what lands on it should be |
+| `src/shared/ScatterGraph/Rotation.luau` | A turn as a unit quaternion, kept beside the angles it was authored from, with the arithmetic between those and the CFrame a placement needs — including how a [rotation range](#setrotationrange) is drawn |
 | `src/shared/ScatterGraph/GridLayout2D.luau` | Where the flat [grid](#the-grid) every field and texture of one evaluation shares sits over the ground, and how a value is read back out of one at a world position |
 | `src/shared/ScatterGraph/SDFGrid2D.luau` | A shape on the ground measured onto that grid as the distance to it, from cells already marked off as `MaterialSDF2D` marks them |
 | `src/shared/ScatterGraph/Texture2D.luau` | A greyscale image on that grid, filled cell by cell or from a function of position, and read as a [density](#density-masking) |
@@ -821,3 +982,4 @@ lists. Deleting it just returns the node to the automatic column layout.
 | `src/shared/ScatterGraph/PlacementLedger.luau` | The durable per-rule record of placed, promoted and removed points that persists hand edits across runs |
 | `src/shared/ScatterGraph/Nodes/` | Per-node evaluation logic |
 | `src/shared/ScatterGraph/Nodes/MergeNode.luau` | What both merges do — read every node wired in and hand on all of it — with [`MergePointsNode`](#mergepoints) and [`MergeInstancesNode`](#mergeinstances) naming which of the two things it is |
+| `src/shared/ScatterGraph/Nodes/PointRangeNode.luau` | What the three range nodes do — read a cloud and two ends, and settle one part of every point between them — with [`SetRotationRangeNode`](#setrotationrange), [`SetScaleRangeNode`](#setscalerange) and [`SetTranslationOffsetRangeNode`](#settranslationoffsetrange) naming which part |

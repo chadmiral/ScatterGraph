@@ -5,6 +5,7 @@ local PlacementStamp = require(script.Parent:WaitForChild("PlacementStamp"))
 local PlacementLedger = require(script.Parent:WaitForChild("PlacementLedger"))
 local Texture2D = require(script.Parent:WaitForChild("Texture2D"))
 local GridLayout2D = require(script.Parent:WaitForChild("GridLayout2D"))
+local Point = require(script.Parent:WaitForChild("Point"))
 
 local M = {}
 
@@ -59,8 +60,15 @@ function M.snapPointsToTerrain(volumes, terrain, points, materialFilter, slopeDe
 	local rayOriginY, rayLength = volumes:verticalBounds()
 	local insideVolume = volumes:containsPointFunction()
 
-	for i, point in pairs(points) do
-		local rayOrigin = Vector3.new(point.X, rayOriginY, point.Z)
+	-- Dropped into a list of this node's own rather than written back over the
+	-- one handed in, which belongs to the node upstream: two chains reading one
+	-- scatter would otherwise find the second of them snapping points the first
+	-- had already snapped. A point that misses the terrain stays where it was.
+	local moved = table.create(#points)
+
+	for i, point in points do
+		local position = point.position
+		local rayOrigin = Vector3.new(position.X, rayOriginY, position.Z)
 		local rayDir = Vector3.new(0, -rayLength, 0)
 		local raycastResult = workspace:Raycast(rayOrigin, rayDir, params)
 		-- Index by i (not table.insert): a missed ray returns nil, and
@@ -69,10 +77,12 @@ function M.snapPointsToTerrain(volumes, terrain, points, materialFilter, slopeDe
 		-- corrupting the material/slope filters.
 		raycastResults[i] = raycastResult
 
-		if raycastResult ~= nil then
-			if raycastResult.Instance == terrain then
-				points[i] = raycastResult.Position
-			end
+		if raycastResult ~= nil and raycastResult.Instance == terrain then
+			-- Only where it now stands changes. Which way it faces and how big it
+			-- is were settled upstream and are no business of the ground.
+			moved[i] = Point.movedTo(point, raycastResult.Position)
+		else
+			moved[i] = point
 		end
 	end
 
@@ -83,7 +93,7 @@ function M.snapPointsToTerrain(volumes, terrain, points, materialFilter, slopeDe
 	end
 
 	for i = 1, #points do
-		if raycastResults[i] ~= nil and insideVolume(points[i]) then
+		if raycastResults[i] ~= nil and insideVolume(moved[i].position) then
 			local dp = raycastResults[i].Normal:Dot(Vector3.new(0.0, 1.0, 0.0))
 			local terrainSlope = math.clamp(1.0 - dp, 0.0, 1.0)
 
@@ -93,7 +103,7 @@ function M.snapPointsToTerrain(volumes, terrain, points, materialFilter, slopeDe
 			end
 
 			if (math.random() < probability) and (not table.find(materialFilterList, raycastResults[i].Material.Name)) then
-				table.insert(filteredPoints, points[i])
+				table.insert(filteredPoints, moved[i])
 			end
 		end
 	end
@@ -124,9 +134,13 @@ function M.scatterPointsAroundPoints(volumes, terrain, seed, points, count, inne
 				d = newP.Magnitude
 			end
 
-			local clusterPoint = p + newP
+			local clusterPoint = p.position + newP
 			if insideFootprint(clusterPoint.X, clusterPoint.Z) then
-				table.insert(newPoints, clusterPoint)
+				-- The cluster point inherits how its seed was turned and sized: it
+				-- is that seed spread out, so a rule that leans its seeds over
+				-- leans what grows around them the same way. A later node can
+				-- still set either on the cluster itself.
+				table.insert(newPoints, Point.new(clusterPoint, p.rotation, p.scale))
 			end
 		end
 	end
@@ -144,7 +158,8 @@ end
 -- stream aligned.
 local function occurrenceIndices(points): { number }
 	local cells = {}
-	for index, p in points do
+	for index, point in points do
+		local p = point.position
 		local cellKey = PlacementLedger.qmm(p.X) .. "," .. PlacementLedger.qmm(p.Z)
 		local cell = cells[cellKey]
 		if cell == nil then
@@ -169,12 +184,14 @@ local function occurrenceIndices(points): { number }
 	return occByIndex
 end
 
+-- How each point is turned and sized comes from the point itself, set upstream by
+-- SetRotationRange and SetScaleRange. This used to draw both here, from a
+-- ScaleRange and a RotationType on the terminal, which said the same thing in a
+-- second place and only per placement rather than per point.
 function M.placeGeoOnPoints(
 	templateGeo,
 	points,
-	scaleRange,
 	colorRange,
-	rotationType,
 	instanceFolder: Folder,
 	occupancy,
 	avoidIntersections: boolean?,
@@ -226,35 +243,30 @@ function M.placeGeoOnPoints(
 	-- evaluated, so the outcome is independent of branch evaluation order.
 	local defer = avoidIntersections == true and occupancy ~= nil
 
-	for index, p in points do
+	for index, point in points do
+		local p = point.position
 		local xmm = PlacementLedger.qmm(p.X)
 		local zmm = PlacementLedger.qmm(p.Z)
 		local occ = occByIndex[index]
 
 		-- Draw the random stream first and unconditionally: a suppressed point
 		-- must consume the very same draws a placed one would, or deleting a
-		-- single prop would restyle every prop scattered after it.
-		local scale = 1
-		if scaleRange then
-			scale = scaleRange.X + math.random() * (scaleRange.Y - scaleRange.X)
-		end
+		-- single prop would restyle every prop scattered after it. The tint is all
+		-- that is drawn here now; how a point is turned and sized was settled
+		-- upstream, per point, before this node was reached.
 		local tintColor = Color3.fromRGB(255, 255, 255)
 		if colorRange then
 			tintColor = M.evalColorSequence(colorRange, math.random())
-		end
-		local rotation = nil
-		if rotationType == "Random" then
-			rotation = CFrame.Angles(2 * math.random() * math.pi, 2 * math.random() * math.pi, 2 * math.random() * math.pi)
-		elseif rotationType == "UpAxis" then
-			rotation = CFrame.fromAxisAngle(Vector3.new(0, 1, 0), math.random() * math.pi * 2)
 		end
 
 		local place = not tracking or run:shouldPlace(graphKey, ruleKey, xmm, zmm, occ)
 		if place then
 			local instance = templateGeo:Clone()
 			instance.Parent = targetFolder
-			instance:PivotTo(CFrame.new(p))
-			instance:ScaleTo(scale)
+			-- Where the point is and which way it faces, then how big it is. Both
+			-- come from the point and nowhere else.
+			instance:PivotTo(Point.cframe(point))
+			instance:ScaleTo(point.scale)
 
 			for _, d in instance:GetDescendants() do
 				if d:IsA("MeshPart") then
@@ -267,10 +279,6 @@ function M.placeGeoOnPoints(
 						end
 					end
 				end
-			end
-
-			if rotation then
-				instance:PivotTo(instance:GetPivot() * rotation)
 			end
 
 			-- Where this came from and what it looks like, so the next run can
@@ -432,16 +440,16 @@ function M.exclusionZoneFunctions(zones: { ExclusionZone }, rule: Instance?): { 
 	return functions
 end
 
-function M.excludePoints(points: { Vector3 }, exclusionFunctions: { (Vector3) -> boolean }): { Vector3 }
+function M.excludePoints(points: { Point.Point }, exclusionFunctions: { (Vector3) -> boolean }): { Point.Point }
 	if not exclusionFunctions then
 		return points
 	end
 
-	local newPoints: { Vector3 } = table.clone(points)
-	local tempPoints: { Vector3 } = {}
+	local newPoints: { Point.Point } = table.clone(points)
+	local tempPoints: { Point.Point } = {}
 	for _, exclusionFunction in exclusionFunctions do
 		for _, point in newPoints do
-			if not exclusionFunction(point) then
+			if not exclusionFunction(point.position) then
 				table.insert(tempPoints, point)
 			end
 		end
@@ -518,14 +526,14 @@ end
 	steepness: the global generator, which the scattering nodes seed, so a graph run
 	twice over unchanged ground thins out the same way twice.
 ]]
-function M.filterByDensity(points: { Vector3 }, density: Texture2D.Texture?): { Vector3 }
+function M.filterByDensity(points: { Point.Point }, density: Texture2D.Texture?): { Point.Point }
 	if density == nil then
 		return points
 	end
 
 	local kept = {}
 	for _, point in points do
-		if math.random() < Texture2D.sample(density, point) then
+		if math.random() < Texture2D.sample(density, point.position) then
 			table.insert(kept, point)
 		end
 	end

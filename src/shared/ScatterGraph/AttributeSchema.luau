@@ -3,14 +3,18 @@
 
 	Which values each node type takes, in the order the panels show them,
 	and what kind of editor each one needs. This is the one place that knows
-	RotationType is a fixed set of strings rather than free text, or that Radius
-	may be cleared because the runtime defaults it.
+	SlopeFilter wants a curve rather than a number, or that Radius may be cleared
+	because the runtime defaults it.
 
 	A value is usually an attribute of the node. It can instead be a wire -- a
 	child ObjectValue of the same name -- which is how a node refers to an
 	instance. PlaceGeometryOnPoints takes its geometry either way. A wire named
 	here is a reference into the scene and is edited as a row; the wires between
 	two nodes are ports on the canvas instead, and are declared in DataTypes.
+
+	A value and a port can be two ways of saying one thing, and where they are the
+	range nodes' A and B they share a name: the port wins, and supersededBy is how
+	the row knows to say it is being ignored.
 
 	Attributes a node carries that are not listed here still appear -- their
 	editor is inferred from the value's type -- so an unrecognised node type, or
@@ -29,7 +33,7 @@ export type Descriptor = {
 	-- What the panel row is titled, when the attribute's own name reads poorly
 	-- there. The name is still what the value is read and written as.
 	label: string?,
-	-- number | string | choice | boolean | vector2 | numberSequence |
+	-- number | string | choice | boolean | vector2 | vector3 | numberSequence |
 	-- colorSequence | instance | readOnly
 	kind: string,
 	-- Set to "packages" to edit this value through the palette browser rather
@@ -43,7 +47,7 @@ export type Descriptor = {
 	optional: boolean?,
 	integer: boolean?,
 	choices: { string }?,
-	-- Component labels for vector2, in X, Y order.
+	-- Component labels for vector2 and vector3, in axis order.
 	components: { string }?,
 	-- What a cleared or missing attribute starts at when the editor needs a
 	-- value to work from.
@@ -56,10 +60,28 @@ export type Descriptor = {
 	description: string?,
 }
 
--- RotationType is matched literally in ScatterGraphHelpers: anything that is
--- not Random or UpAxis leaves the placement unrotated, so None is spelled out
--- rather than left as an empty box.
-local ROTATION_TYPES = { "None", "UpAxis", "Random" }
+-- The two ends of a range node's range, which may be typed here or wired as
+-- ports. The wire outranks the value, which is what supersededBy says: the row
+-- greys itself out and marks itself unused while a wire is attached. Both are
+-- optional -- an end with neither set stands at no change -- and the three nodes
+-- differ only in what kind of value an end is.
+local function rangeEnds(kind: string, default: any, what: string): { Descriptor }
+	local ends = {}
+
+	for _, slot in { "A", "B" } do
+		table.insert(ends, {
+			name = slot,
+			kind = kind,
+			optional = true,
+			default = default,
+			supersededBy = slot,
+			description = what .. " Ignored while something is wired to the " .. slot .. " port, which says "
+				.. "the same thing in a way several nodes can share.",
+		})
+	end
+
+	return ends
+end
 
 local SCHEMA: { [string]: { Descriptor } } = {
 	ScatterPoints = {
@@ -138,6 +160,48 @@ local SCHEMA: { [string]: { Descriptor } } = {
 				.. "of one or more rules.",
 		},
 	},
+
+	Vector3 = {
+		{
+			name = "Value",
+			kind = "vector3",
+			default = Vector3.zero,
+			description = "The three numbers this node hands to everything wired to it, such as one end of "
+				.. "a scale or an offset range.",
+		},
+	},
+
+	Rotation = {
+		{
+			name = "Angles",
+			kind = "vector3",
+			default = Vector3.zero,
+			components = { "X", "Y", "Z" },
+			description = "The turn this node hands on, in degrees about X, then Y, then Z -- the order "
+				.. "Studio's own Orientation box reads in. A range between two rotations is drawn axis by "
+				.. "axis between the angles typed here, so 0 to 360 about Y is a full random spin.",
+		},
+	},
+
+	SetRotationRange = rangeEnds(
+		"vector3",
+		Vector3.zero,
+		"One end of the turn, in degrees about X, then Y, then Z. Each axis is drawn between the two ends "
+			.. "on its own, so 0 to 360 about Y is a full random spin."
+	),
+
+	SetScaleRange = rangeEnds(
+		"number",
+		1,
+		"One end of the size. One number rather than three, since a model can only be scaled evenly."
+	),
+
+	SetTranslationOffsetRange = rangeEnds(
+		"vector3",
+		Vector3.zero,
+		"One corner of the offset, in studs. Each axis is drawn between the two ends on its own, so the "
+			.. "offsets fill the box the two corners describe."
+	),
 
 	MaterialSDF2D = {
 		{
@@ -221,24 +285,6 @@ local SCHEMA: { [string]: { Descriptor } } = {
 				.. "ReplicatedStorage.ScatterGraphPalette, or type an id into that window's search box.",
 		},
 		{
-			name = "ScaleRange",
-			kind = "vector2",
-			optional = true,
-			components = { "Min", "Max" },
-			default = Vector2.new(1, 1),
-			description = "Uniform scale, sampled per instance between Min and Max. Left unset, every "
-				.. "instance is placed at its authored size.",
-		},
-		{
-			name = "RotationType",
-			kind = "choice",
-			optional = true,
-			choices = ROTATION_TYPES,
-			description = "How each instance is turned. UpAxis is a random spin around world Y, which "
-				.. "suits anything that grows upright; Random turns on all three axes; None leaves the "
-				.. "placement as it comes.",
-		},
-		{
 			name = "ColorRange",
 			kind = "colorSequence",
 			optional = true,
@@ -301,6 +347,7 @@ local KIND_BY_TYPE = {
 	boolean = "boolean",
 	string = "string",
 	Vector2 = "vector2",
+	Vector3 = "vector3",
 	NumberSequence = "numberSequence",
 	ColorSequence = "colorSequence",
 }

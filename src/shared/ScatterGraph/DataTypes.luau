@@ -18,6 +18,9 @@
 	* A number, a single value one node settles and another reads -- a threshold
 	  distance being the first of them. A number port left unwired stands at its
 	  own default rather than at nothing.
+	* A 3D vector and a rotation, which are what a point carries besides its
+	  position, and so what the nodes that set either of those read at both ends
+	  of their range.
 
 	Mostly they are not interchangeable -- a filter has nothing to say about a
 	placed model, and the Output registry has nothing to place a bare point with
@@ -50,19 +53,30 @@
 
 local DataTypes = {}
 
-export type DataType = "Points" | "Instances" | "SDFGrid2D" | "Texture2D" | "Number"
+export type DataType =
+	"Points"
+	| "Instances"
+	| "SDFGrid2D"
+	| "Texture2D"
+	| "Number"
+	| "Vector3"
+	| "Rotation"
 
 local POINTS: DataType = "Points"
 local INSTANCES: DataType = "Instances"
 local SDF_GRID_2D: DataType = "SDFGrid2D"
 local TEXTURE_2D: DataType = "Texture2D"
 local NUMBER: DataType = "Number"
+local VECTOR3: DataType = "Vector3"
+local ROTATION: DataType = "Rotation"
 
 DataTypes.POINTS = POINTS
 DataTypes.INSTANCES = INSTANCES
 DataTypes.SDF_GRID_2D = SDF_GRID_2D
 DataTypes.TEXTURE_2D = TEXTURE_2D
 DataTypes.NUMBER = NUMBER
+DataTypes.VECTOR3 = VECTOR3
+DataTypes.ROTATION = ROTATION
 
 -- One slot down the left of a node's card, and the wire dropped on it.
 export type Slot = {
@@ -116,6 +130,13 @@ local PRODUCES: { [string]: DataType } = {
 	SDFThreshold2D = TEXTURE_2D,
 	NoiseTexture2D = TEXTURE_2D,
 	Number = NUMBER,
+	Vector3 = VECTOR3,
+	Rotation = ROTATION,
+	-- The three that vary a point between two ends hand the cloud straight on,
+	-- with one part of every point in it settled.
+	SetRotationRange = POINTS,
+	SetScaleRange = POINTS,
+	SetTranslationOffsetRange = POINTS,
 }
 
 -- The density every point-producing node takes: a texture saying how much of a
@@ -147,6 +168,30 @@ local INPUTS: { [string]: { Slot } } = {
 	SDFThreshold2D = {
 		{ name = "SDF", label = "SDF", dataType = SDF_GRID_2D, wireNodeType = SDF_GRID_2D },
 		{ name = "Distance", dataType = NUMBER, wireNodeType = NUMBER },
+	},
+
+	-- A cloud and the two ends to vary it between. Either end may be typed on the
+	-- node instead of wired -- see AttributeSchema, where those rows are declared
+	-- -- and the port wins where it is used, so that several rules can lean or
+	-- shrink by the same amounts by being wired to one Rotation or one Number.
+	SetRotationRange = {
+		{ name = "Points", dataType = POINTS, wireNodeType = POINTS },
+		{ name = "A", dataType = ROTATION, wireNodeType = ROTATION },
+		{ name = "B", dataType = ROTATION, wireNodeType = ROTATION },
+	},
+
+	-- A number at either end rather than a vector: a model is scaled evenly or not
+	-- at all, so two thirds of a vector could never be honoured.
+	SetScaleRange = {
+		{ name = "Points", dataType = POINTS, wireNodeType = POINTS },
+		{ name = "A", dataType = NUMBER, wireNodeType = NUMBER },
+		{ name = "B", dataType = NUMBER, wireNodeType = NUMBER },
+	},
+
+	SetTranslationOffsetRange = {
+		{ name = "Points", dataType = POINTS, wireNodeType = POINTS },
+		{ name = "A", dataType = VECTOR3, wireNodeType = VECTOR3 },
+		{ name = "B", dataType = VECTOR3, wireNodeType = VECTOR3 },
 	},
 
 	PlaceGeometryOnPoints = {
@@ -221,6 +266,8 @@ local COLORS: { [string]: Color3 } = {
 	SDFGrid2D = Color3.fromRGB(226, 192, 68),
 	Texture2D = Color3.fromRGB(232, 110, 96),
 	Number = Color3.fromRGB(176, 138, 220),
+	Vector3 = Color3.fromRGB(84, 194, 188),
+	Rotation = Color3.fromRGB(214, 124, 182),
 }
 
 -- A port whose type is not known: grey, so it reads as unlabelled rather than
@@ -234,6 +281,8 @@ local LABELS: { [string]: string } = {
 	SDFGrid2D = "2D SDF grid",
 	Texture2D = "2D texture",
 	Number = "number",
+	Vector3 = "3D vector",
+	Rotation = "rotation",
 }
 
 function DataTypes.color(dataType: DataType?): Color3

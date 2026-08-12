@@ -5,6 +5,13 @@ local PlaceGeometryOnPointsNode = GraphNode:new()
 PlaceGeometryOnPointsNode.name = "PlaceGeometryOnPointsNode"
 PlaceGeometryOnPointsNode._type = "PlaceGeometryOnPointsNode"
 
+-- Attributes this node used to place by, which a point now carries instead, and
+-- the node that sets each of them.
+local RETIRED = {
+	{ name = "ScaleRange", instead = "Set Scale Range" },
+	{ name = "RotationType", instead = "Set Rotation Range" },
+}
+
 function PlaceGeometryOnPointsNode:evaluate(volumes, terrain, ctx)
 	local n = ctx.node
 	local insertService = ctx.insertService
@@ -43,12 +50,24 @@ function PlaceGeometryOnPointsNode:evaluate(volumes, terrain, ctx)
 			end
 		end
 
-		local scaleRange = n:GetAttribute("ScaleRange")
-		local rotationType = n:GetAttribute("RotationType")
 		local colorRange = n:GetAttribute("ColorRange")
 		local avoidIntersections = n:GetAttribute("AvoidIntersections") == true
 		local radius = n:GetAttribute("Radius") or 5
 		local priority = n:GetAttribute("Priority") or 0
+
+		-- How a placement is turned and sized is the point's to say, and used to
+		-- be this node's. A graph written before that still carries the old
+		-- attributes, and they are no longer read: worth saying once a run, since
+		-- the alternative is a scatter that quietly stops varying.
+		for _, retired in RETIRED do
+			if n:GetAttribute(retired.name) ~= nil then
+				warn(
+					"ScatterGraph " .. n.Name .. ": its " .. retired.name .. " is no longer read. Use a "
+						.. retired.instead .. " node upstream of it, and delete the attribute to stop this "
+						.. "being said."
+				)
+			end
+		end
 
 		points = Helpers.excludePoints(points, ctx.exclusionFunctions)
 		-- The rule identity threaded down from the Output entry lets each
@@ -57,9 +76,7 @@ function PlaceGeometryOnPointsNode:evaluate(volumes, terrain, ctx)
 		placed = Helpers.placeGeoOnPoints(
 			geo,
 			points,
-			scaleRange,
 			colorRange,
-			rotationType,
 			ctx.instanceFolder,
 			ctx.occupancy,
 			avoidIntersections,

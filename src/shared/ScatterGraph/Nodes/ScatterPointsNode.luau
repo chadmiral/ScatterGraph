@@ -1,5 +1,6 @@
 local GraphNode = require(script.Parent:WaitForChild("GraphNode"))
 local Helpers = require(script.Parent.Parent:WaitForChild("ScatterGraphHelpers"))
+local Point = require(script.Parent.Parent:WaitForChild("Point"))
 
 ScatterPointsNode = GraphNode:new()
 ScatterPointsNode.name = "ScatterPointsNode"
@@ -64,7 +65,9 @@ local function scatterPoints(volumes, terrain, seed, spacing)
 
 					local x, z = cellPoint(seed, i, j, cellSize)
 					if insideFootprint(x, z) then
-						table.insert(points, Vector3.new(x, scatterHeight, z))
+						--unturned and full size, which is what the nodes that set
+						--either of those take as their starting point
+						table.insert(points, Point.at(Vector3.new(x, scatterHeight, z)))
 					end
 				end
 			end
@@ -75,10 +78,10 @@ local function scatterPoints(volumes, terrain, seed, spacing)
 	--global random stream per point, and the order volumes come back from
 	--CollectionService is not guaranteed
 	table.sort(points, function(a, b)
-		if a.X ~= b.X then
-			return a.X < b.X
+		if a.position.X ~= b.position.X then
+			return a.position.X < b.position.X
 		end
-		return a.Z < b.Z
+		return a.position.Z < b.position.Z
 	end)
 
 	return points

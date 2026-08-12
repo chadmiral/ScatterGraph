@@ -37,10 +37,32 @@ local SNAP_TO_TERRAIN = {
 	attributes = { MaterialFilter = "Water", SlopeFilter = NumberSequence.new(1, 0) },
 }
 
+-- How a placement is turned and sized belongs to the points rather than to the
+-- terminal, so the variation every one of these rules wants is two nodes in the
+-- chain. A spin about Y suits anything that grows upright; a tumble on all three
+-- axes suits anything that does not stand on ground.
+local SPIN = {
+	name = "SetRotationRange",
+	nodeType = "SetRotationRange",
+	attributes = { A = Vector3.zero, B = Vector3.new(0, 360, 0) },
+}
+
+local TUMBLE = {
+	name = "SetRotationRange",
+	nodeType = "SetRotationRange",
+	attributes = { A = Vector3.zero, B = Vector3.new(360, 360, 360) },
+}
+
+local VARY_SIZE = {
+	name = "SetScaleRange",
+	nodeType = "SetScaleRange",
+	attributes = { A = 0.9, B = 1.1 },
+}
+
 local PLACE_ASSET = {
 	name = "PlaceAssetOnPoints",
 	nodeType = "PlaceGeometryOnPoints",
-	attributes = { ScaleRange = Vector2.new(0.9, 1.1), RotationType = "UpAxis" },
+	attributes = {},
 }
 
 -- Each template is a chain listed source-first; every node is wired to the one
@@ -50,9 +72,10 @@ RuleTemplates.terrainProp = {
 	ruleName = "TerrainProp",
 	label = "Terrain Prop",
 	icon = "\u{1F332}",
-	tooltip = "Adds a rule that scatters points, drops them onto the terrain and places one asset at "
-		.. "each: ScatterPoints, SnapPointsToTerrain, PlaceAssetOnPoints. Set its Asset to finish it.",
-	nodes = { SCATTER_POINTS, SNAP_TO_TERRAIN, PLACE_ASSET },
+	tooltip = "Adds a rule that scatters points, drops them onto the terrain, spins and resizes each one "
+		.. "and places an asset there: ScatterPoints, SnapPointsToTerrain, SetRotationRange, "
+		.. "SetScaleRange, PlaceAssetOnPoints. Set its Asset to finish it.",
+	nodes = { SCATTER_POINTS, SNAP_TO_TERRAIN, SPIN, VARY_SIZE, PLACE_ASSET },
 }
 
 -- The whole rule is Clustered Prop rather than Cluster, which is the single node
@@ -63,9 +86,9 @@ RuleTemplates.cluster = {
 	ruleName = "ClusteredProp",
 	label = "Clustered Prop",
 	icon = "\u{1F33F}",
-	tooltip = "Adds a rule that scatters points, spreads a clump around each one and drops those onto "
-		.. "the terrain: ScatterPoints, Cluster, SnapPointsToTerrain, PlaceAssetOnPoints. Set its "
-		.. "Asset to finish it.",
+	tooltip = "Adds a rule that scatters points, spreads a clump around each one, drops those onto the "
+		.. "terrain and spins and resizes each: ScatterPoints, Cluster, SnapPointsToTerrain, "
+		.. "SetRotationRange, SetScaleRange, PlaceAssetOnPoints. Set its Asset to finish it.",
 	nodes = {
 		-- Cluster seeds are spaced further apart than a solo scatter, since
 		-- each one fills in with Count points of its own.
@@ -76,6 +99,10 @@ RuleTemplates.cluster = {
 			attributes = { Seed = 2, InnerRadius = 0, OuterRadius = 8, Count = 20 },
 		},
 		SNAP_TO_TERRAIN,
+		-- After the cluster rather than before it, so each point of a clump is
+		-- turned and sized for itself instead of the whole clump alike.
+		SPIN,
+		VARY_SIZE,
 		PLACE_ASSET,
 	},
 }
@@ -85,18 +112,11 @@ RuleTemplates.floatingProp = {
 	label = "Floating Prop",
 	icon = "\u{1F426}",
 	tooltip = "Adds a rule that places an asset at each scattered point without consulting the "
-		.. "terrain, for anything that hangs in the air: ScatterPoints, PlaceAssetOnPoints. Set its "
-		.. "Asset to finish it.",
+		.. "terrain, for anything that hangs in the air: ScatterPoints, SetRotationRange, "
+		.. "SetScaleRange, PlaceAssetOnPoints. Set its Asset to finish it.",
 	-- No terrain snap, so points stay at the middle of the volume's vertical
 	-- span. Rotation is unconstrained because nothing is standing on ground.
-	nodes = {
-		SCATTER_POINTS,
-		{
-			name = "PlaceAssetOnPoints",
-			nodeType = "PlaceGeometryOnPoints",
-			attributes = { ScaleRange = Vector2.new(0.9, 1.1), RotationType = "Random" },
-		},
-	},
+	nodes = { SCATTER_POINTS, TUMBLE, VARY_SIZE, PLACE_ASSET },
 }
 
 -- The order both windows offer them in, simplest first.

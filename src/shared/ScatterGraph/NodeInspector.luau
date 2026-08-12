@@ -415,6 +415,45 @@ function NodeInspector.new(pluginRef: Plugin, overlay)
 		return container
 	end
 
+	-- Three boxes rather than two, and the components read off by axis rather than
+	-- by which end of a range they are: a vector here is a size or an offset, not
+	-- a Min and a Max.
+	local function makeVector3Editor(node: Instance, descriptor, value: any): Frame
+		local container = makeEditorContainer()
+		local components = descriptor.components or { "X", "Y", "Z" }
+		local current = value or descriptor.default or Vector3.zero
+
+		local function componentOf(vector: Vector3, index: number): number
+			return if index == 1 then vector.X elseif index == 2 then vector.Y else vector.Z
+		end
+
+		for index = 1, 3 do
+			local box = makeInput()
+			box.Size = UDim2.new(1 / 3, -3, 1, -4)
+			box.Position = UDim2.new((index - 1) / 3, if index == 1 then 0 else 2, 0, 2)
+			box.PlaceholderText = components[index]
+			box.Text = if value ~= nil then string.format("%g", componentOf(value, index)) else ""
+			box.Parent = container
+
+			box.FocusLost:Connect(function()
+				local number = tonumber(box.Text)
+				if number == nil then
+					box.Text = if value ~= nil then string.format("%g", componentOf(value, index)) else ""
+					return
+				end
+
+				local updated = Vector3.new(
+					if index == 1 then number else current.X,
+					if index == 2 then number else current.Y,
+					if index == 3 then number else current.Z
+				)
+				commitValue(node, descriptor, updated)
+			end)
+		end
+
+		return container
+	end
+
 	local function makeSequenceEditor(node: Instance, descriptor, value: any): Frame
 		local container = makeEditorContainer()
 		local button = makeValueButton(if value ~= nil then formatValue(value) else "(not set)", value == nil)
@@ -446,6 +485,8 @@ function NodeInspector.new(pluginRef: Plugin, overlay)
 			return makeBooleanEditor(node, descriptor, value)
 		elseif descriptor.kind == "vector2" then
 			return makeVector2Editor(node, descriptor, value)
+		elseif descriptor.kind == "vector3" then
+			return makeVector3Editor(node, descriptor, value)
 		elseif descriptor.kind == "numberSequence" or descriptor.kind == "colorSequence" then
 			return makeSequenceEditor(node, descriptor, value)
 		elseif descriptor.kind == "instance" then

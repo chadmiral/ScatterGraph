@@ -154,7 +154,10 @@ local ZOOM_WHEEL_STEP = 1.075
 -- several chains into one, and grey is the outlet the graph ends at. Both merges
 -- are the one colour: what a title says is what the node does to what it is
 -- given, and they do the same thing -- which of the two kinds of thing it is
--- being done to is what the ports are coloured for. These are fixed rather than theme
+-- being done to is what the ports are coloured for. The three that settle part of
+-- every point in a cloud share a colour with each other for the same reason, and
+-- the two that hold nothing but a value they hand on share the violet the Number
+-- has always had. These are fixed rather than theme
 -- colours because they say which node type this is, not which part of the window
 -- it is. A reroute is not here: it has no title to colour, being drawn as a dot in
 -- the colour of whatever it is carrying.
@@ -166,6 +169,11 @@ local TITLE_COLORS = {
 	SDFThreshold2D = Color3.fromRGB(140, 84, 62),
 	NoiseTexture2D = Color3.fromRGB(140, 84, 62),
 	Number = Color3.fromRGB(104, 78, 148),
+	Vector3 = Color3.fromRGB(104, 78, 148),
+	Rotation = Color3.fromRGB(104, 78, 148),
+	SetRotationRange = Color3.fromRGB(118, 92, 118),
+	SetScaleRange = Color3.fromRGB(118, 92, 118),
+	SetTranslationOffsetRange = Color3.fromRGB(118, 92, 118),
 	PlaceGeometryOnPoints = Color3.fromRGB(78, 84, 134),
 	ParentInstancesTo = Color3.fromRGB(70, 104, 140),
 	MergePoints = Color3.fromRGB(72, 100, 96),
@@ -264,6 +272,29 @@ local NODE_TEMPLATES = {
 		attributes = {},
 	},
 	{
+		-- The three that settle part of every point in a cloud. Each starts at the
+		-- range most rules want of it, so one dropped on the canvas and wired to a
+		-- cloud does something without being set up: a full spin, a little
+		-- variation in size, and -- having no such obvious default -- no movement.
+		-- Either end can be wired instead, and a wire outranks these.
+		label = "Set Rotation Range",
+		name = "SetRotationRange",
+		nodeType = "SetRotationRange",
+		attributes = { A = Vector3.zero, B = Vector3.new(0, 360, 0) },
+	},
+	{
+		label = "Set Scale Range",
+		name = "SetScaleRange",
+		nodeType = "SetScaleRange",
+		attributes = { A = 0.9, B = 1.1 },
+	},
+	{
+		label = "Set Translation Offset Range",
+		name = "SetTranslationOffsetRange",
+		nodeType = "SetTranslationOffsetRange",
+		attributes = { A = Vector3.zero, B = Vector3.zero },
+	},
+	{
 		label = "Material SDF 2D",
 		name = "MaterialSDF2D",
 		nodeType = "MaterialSDF2D",
@@ -288,12 +319,28 @@ local NODE_TEMPLATES = {
 		attributes = { Value = 0 },
 	},
 	{
+		label = "3D Vector",
+		name = "Vector3",
+		nodeType = "Vector3",
+		attributes = { Value = Vector3.zero },
+	},
+	{
+		-- Typed as three angles in degrees and handed on as a quaternion, which
+		-- is what lets the range between two of them mean one thing.
+		label = "Rotation",
+		name = "Rotation",
+		nodeType = "Rotation",
+		attributes = { Angles = Vector3.zero },
+	},
+	{
 		-- Named PlaceAssetOnPoints while its NodeType is PlaceGeometryOnPoints,
-		-- which is how every existing graph has it.
+		-- which is how every existing graph has it. Nothing is set on a fresh one:
+		-- how a placement is turned and sized is the point's to say, and the asset
+		-- to clone is picked from the palette rather than typed.
 		label = "Place Asset",
 		name = "PlaceAssetOnPoints",
 		nodeType = "PlaceGeometryOnPoints",
-		attributes = { ScaleRange = Vector2.new(0.9, 1.1), RotationType = "UpAxis" },
+		attributes = {},
 	},
 	{
 		-- Puts what the rule placed somewhere else in the hierarchy and hands it
