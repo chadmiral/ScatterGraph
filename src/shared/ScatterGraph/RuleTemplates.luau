@@ -23,10 +23,12 @@ local HttpService = game:GetService("HttpService")
 
 local RuleTemplates = {}
 
--- The nodes shared between templates. Note that the terminal is named
--- PlaceAssetOnPoints while its NodeType is PlaceGeometryOnPoints -- the two
--- differ throughout the existing graphs, and the registry keys off the
--- attribute.
+-- The nodes shared between templates. Note that a node's name and its NodeType
+-- are two different things, and two nodes here are deliberately named something
+-- other than their type: the terminal is PlaceAssetOnPoints over a NodeType of
+-- PlaceGeometryOnPoints, which is how the existing graphs have it, and the
+-- clustering node is Cluster over ScatterPointsAroundPoints. The registry keys
+-- off the attribute, so only the attribute has to stay put.
 local SCATTER_POINTS = { name = "ScatterPoints", nodeType = "ScatterPoints", attributes = { Seed = 1, Spacing = 40 } }
 
 local SNAP_TO_TERRAIN = {
@@ -53,19 +55,23 @@ RuleTemplates.terrainProp = {
 	nodes = { SCATTER_POINTS, SNAP_TO_TERRAIN, PLACE_ASSET },
 }
 
+-- The whole rule is Clustered Prop rather than Cluster, which is the single node
+-- inside it that does the clustering. Both are offered in the one menu, the
+-- rules above a line and the single nodes below it, and two entries called
+-- Cluster in it would be a coin toss.
 RuleTemplates.cluster = {
-	ruleName = "Cluster",
-	label = "Cluster",
+	ruleName = "ClusteredProp",
+	label = "Clustered Prop",
 	icon = "\u{1F33F}",
 	tooltip = "Adds a rule that scatters points, spreads a clump around each one and drops those onto "
-		.. "the terrain: ScatterPoints, ScatterPointsAroundPoints, SnapPointsToTerrain, "
-		.. "PlaceAssetOnPoints. Set its Asset to finish it.",
+		.. "the terrain: ScatterPoints, Cluster, SnapPointsToTerrain, PlaceAssetOnPoints. Set its "
+		.. "Asset to finish it.",
 	nodes = {
 		-- Cluster seeds are spaced further apart than a solo scatter, since
 		-- each one fills in with Count points of its own.
 		{ name = "ScatterPoints", nodeType = "ScatterPoints", attributes = { Seed = 1, Spacing = 60 } },
 		{
-			name = "ScatterPointsAroundPoints",
+			name = "Cluster",
 			nodeType = "ScatterPointsAroundPoints",
 			attributes = { Seed = 2, InnerRadius = 0, OuterRadius = 8, Count = 20 },
 		},

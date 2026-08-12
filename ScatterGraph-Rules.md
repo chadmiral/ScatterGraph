@@ -22,7 +22,7 @@ This document describes every node type, attribute, wire, tag, and volume settin
 |------------|----------------|
 | `Output` | Entry point; fans out to placement rules |
 | `ScatterPoints` | Generates initial point cloud |
-| `ScatterPointsAroundPoints` | Expands each upstream point into a local cluster |
+| `ScatterPointsAroundPoints` | Expands each upstream point into a local cluster. Called **Cluster** in both windows |
 | `SnapPointsToTerrain` | Raycasts to terrain; filters by slope and material |
 | `MaterialSDF2D` | Measures how far every spot of ground under the volumes is from named terrain materials, seen from above |
 | `SDFThreshold2D` | Cuts a distance field at a distance, giving a density texture that is white beyond it and black within |
@@ -232,6 +232,8 @@ Generates an initial point cloud using a simplified Poisson-disc grid: one jitte
 ---
 
 ### ScatterPointsAroundPoints
+
+**Both windows call this node `Cluster`**, which is what it makes; **`ScatterPointsAroundPoints`** is the **`NodeType`** every graph carries and the registry keys off, and it is what this document is organised by. The terminal has the same split the other way about: it is conventionally named `PlaceAssetOnPoints` over a **`NodeType`** of [`PlaceGeometryOnPoints`](#placegeometryonpoints). Renaming a node instance is always safe — nodes are found by following wires, never by name.
 
 For each point from upstream, generates up to **`Count`** additional points in an annulus between **`InnerRadius`** and **`OuterRadius`** (horizontal XZ offset from the seed). Uses its own **`Seed`** for deterministic randomness.
 

@@ -240,8 +240,12 @@ local NODE_TEMPLATES = {
 		attributes = { Seed = 1, Spacing = 40 },
 	},
 	{
-		label = "Scatter Around Points",
-		name = "ScatterPointsAroundPoints",
+		-- Called Cluster, which is what it makes, while its NodeType stays
+		-- ScatterPointsAroundPoints -- the name every graph in existence carries
+		-- and the registry keys off. The terminal is the same the other way
+		-- about: PlaceAssetOnPoints over a NodeType of PlaceGeometryOnPoints.
+		label = "Cluster",
+		name = "Cluster",
 		nodeType = "ScatterPointsAroundPoints",
 		attributes = { Seed = 2, InnerRadius = 0, OuterRadius = 8, Count = 10 },
 	},
