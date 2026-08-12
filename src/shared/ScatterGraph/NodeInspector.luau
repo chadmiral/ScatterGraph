@@ -73,6 +73,8 @@ function NodeInspector.new(pluginRef: Plugin, overlay)
 	local connections: { RBXScriptConnection } = {}
 	local provider: (() -> { Instance })? = nil
 	local emptyMessage: string? = nil
+	-- Which of the nodes the provider hands over are followed but not drawn.
+	local isHidden: ((Instance) -> boolean)? = nil
 
 	-- Called after something the panel was watching changed, for a host that
 	-- draws the same graph elsewhere and needs to keep up.
@@ -614,31 +616,36 @@ function NodeInspector.new(pluginRef: Plugin, overlay)
 		end
 
 		local nodes = provider()
+		local order = 0
+		local shown = 0
 
-		if #nodes == 0 then
-			if emptyMessage ~= nil then
-				addMessage(emptyMessage, 0)
+		for _, node in nodes do
+			if isHidden == nil or not isHidden(node) then
+				shown += 1
+				order += 1
+				addSection(node, order)
+
+				local rows = AttributeSchema.rowsFor(node)
+				if #rows == 0 then
+					order += 1
+					addMessage("(no attributes)", order)
+				end
+
+				for _, descriptor in rows do
+					order += 1
+					addAttributeRow(node, descriptor, order)
+				end
 			end
-			return
+
+			-- Watched whether or not it is drawn. A node kept out of the list is
+			-- still part of the chain, and what it is wired to decides which
+			-- nodes belong on screen, so rewiring one has to rebuild the panel
+			-- even though nothing in it stands for the node itself.
+			watch(node)
 		end
 
-		local order = 0
-		for _, node in nodes do
-			order += 1
-			addSection(node, order)
-
-			local rows = AttributeSchema.rowsFor(node)
-			if #rows == 0 then
-				order += 1
-				addMessage("(no attributes)", order)
-			end
-
-			for _, descriptor in rows do
-				order += 1
-				addAttributeRow(node, descriptor, order)
-			end
-
-			watch(node)
+		if shown == 0 and emptyMessage ~= nil then
+			addMessage(emptyMessage, 0)
 		end
 	end
 
@@ -650,15 +657,23 @@ function NodeInspector.new(pluginRef: Plugin, overlay)
 
 	-- What to show, as a function so that a rebuild after a rewire asks again
 	-- rather than redrawing the nodes that used to be there.
-	function inspector.show(nodesProvider: () -> { Instance }, message: string?)
+	--
+	-- `hidden` picks out nodes the caller wants followed but not listed: they
+	-- are watched like any other, and the panel reads as though they were not
+	-- there. The empty message stands in when everything the chain holds is
+	-- hidden, since a panel of nothing needs a reason showing as much as an
+	-- unwired one does.
+	function inspector.show(nodesProvider: () -> { Instance }, message: string?, hidden: ((Instance) -> boolean)?)
 		provider = nodesProvider
 		emptyMessage = message
+		isHidden = hidden
 		render()
 	end
 
 	function inspector.clear()
 		provider = nil
 		emptyMessage = nil
+		isHidden = nil
 		teardown()
 	end
 

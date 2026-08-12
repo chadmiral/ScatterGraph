@@ -16,6 +16,7 @@ local SDFThreshold2DNode = require(script.Parent.Nodes:WaitForChild("SDFThreshol
 local NoiseTexture2DNode = require(script.Parent.Nodes:WaitForChild("NoiseTexture2DNode"))
 local NumberNode = require(script.Parent.Nodes:WaitForChild("NumberNode"))
 local RerouteNode = require(script.Parent.Nodes:WaitForChild("RerouteNode"))
+local ParentInstancesToNode = require(script.Parent.Nodes:WaitForChild("ParentInstancesToNode"))
 local GridLayout2D = require(script.Parent:WaitForChild("GridLayout2D"))
 local Helpers = require(script.Parent:WaitForChild("ScatterGraphHelpers"))
 local OccupancyStore = require(script.Parent:WaitForChild("OccupancyStore"))
@@ -120,6 +121,7 @@ local nodeRegistry = {
 	NoiseTexture2D = NoiseTexture2DNode,
 	Number = NumberNode,
 	Reroute = RerouteNode,
+	ParentInstancesTo = ParentInstancesToNode,
 }
 
 local evaluateNode

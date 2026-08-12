@@ -288,6 +288,14 @@ function M.placeGeoOnPoints(
 			-- The footprint is a circle of the given radius centered on the
 			-- placement point (rotation/scale pivot about p, so the center stays
 			-- at p).
+			-- Returned whether or not it turns out to survive. A deferred candidate
+			-- has been made and parented by now, and what the caller does with the
+			-- list -- reparenting it, today -- is a thing to do to an instance that
+			-- exists, not a claim that it will still be here at the end of the run.
+			-- resolveDeferred destroys the ones that lose, wherever they have been
+			-- put by then.
+			table.insert(instances, instance)
+
 			if defer then
 				-- Do not tag or record yet; resolveDeferred decides which
 				-- candidates survive and records the winners.
@@ -312,7 +320,6 @@ function M.placeGeoOnPoints(
 				if tracking then
 					run:recordPlaced(graphKey, ruleKey, xmm, zmm, occ)
 				end
-				table.insert(instances, instance)
 			end
 		end
 	end

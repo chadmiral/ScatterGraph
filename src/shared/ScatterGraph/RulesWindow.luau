@@ -90,6 +90,15 @@ local function collectUpstreamNodes(node: Instance?, visited: { [Instance]: bool
 	table.insert(ordered, node)
 end
 
+-- A node the walk goes through but the panel does not list. A reroute is a bend
+-- in a wire drawn on the Graph view's canvas: it has nothing to set and says
+-- nothing about the rule, so listing it here is a heading over an empty section
+-- between two nodes that do have something to show. This window has no canvas
+-- for it to be a bend in.
+local function isHiddenFromList(node: Instance): boolean
+	return node:GetAttribute("NodeType") == "Reroute"
+end
+
 -- Deletes the registry entry and the nodes behind it, but only the nodes this
 -- output is alone in using: a node feeding two outputs still has a reason to
 -- exist. The rule folder goes too once nothing is left in it.
@@ -190,7 +199,7 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 			local ordered = {}
 			collectUpstreamNodes(output.Value, {}, ordered)
 			return ordered
-		end, "This output is not wired to a node.")
+		end, "This output is not wired to a node.", isHiddenFromList)
 	end
 
 	local function addListRow(list: ScrollingFrame, text: string, isSelected: boolean, order: number, pick: () -> ())

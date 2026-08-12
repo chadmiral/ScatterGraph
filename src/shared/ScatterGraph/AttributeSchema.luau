@@ -265,6 +265,21 @@ local SCHEMA: { [string]: { Descriptor } } = {
 				.. "outranks everything. Does nothing unless AvoidIntersections is set.",
 		},
 	},
+
+	ParentInstancesTo = {
+		-- A reference into the place, so a child ObjectValue rather than an
+		-- attribute -- an attribute cannot hold one. Required: a node with nowhere
+		-- to put anything has nothing to do, and saying so on the card beats
+		-- leaving an author to wonder why a rule's geometry has not moved.
+		{
+			name = "Parent",
+			kind = "instance",
+			source = "wire",
+			description = "Where the instances are moved to. Select it in Studio, then set it here. "
+				.. "It must be something in this place, so a graph carrying this node only works "
+				.. "where that exists.",
+		},
+	},
 }
 
 -- Attributes that are not parameters of the node. NodeType is what makes it a

@@ -9,6 +9,12 @@ function PlaceGeometryOnPointsNode:evaluate(volumes, terrain, ctx)
 	local n = ctx.node
 	local insertService = ctx.insertService
 
+	-- What this node placed, which is what the instances it produces actually
+	-- are. The Output registry does nothing with them -- reaching them is what
+	-- makes the placement happen -- but a node between the two, ParentInstancesTo
+	-- today, has them to work on.
+	local placed = {}
+
 	local geo = nil
 	local assetWire = n:FindFirstChild("Asset")
 	if assetWire and assetWire:IsA("ObjectValue") and assetWire.Value ~= nil then
@@ -48,7 +54,7 @@ function PlaceGeometryOnPointsNode:evaluate(volumes, terrain, ctx)
 		-- The rule identity threaded down from the Output entry lets each
 		-- placement be stamped and recorded, and stands in for the branch id so
 		-- a rule never rejects its own placements during resolution.
-		Helpers.placeGeoOnPoints(
+		placed = Helpers.placeGeoOnPoints(
 			geo,
 			points,
 			scaleRange,
@@ -65,6 +71,8 @@ function PlaceGeometryOnPointsNode:evaluate(volumes, terrain, ctx)
 			ctx.ruleName
 		)
 	end
+
+	return placed
 end
 
 return PlaceGeometryOnPointsNode

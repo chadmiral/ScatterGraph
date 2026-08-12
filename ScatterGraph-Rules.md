@@ -12,7 +12,7 @@ This document describes every node type, attribute, wire, tag, and volume settin
 2. Volumes with **`Enabled`** = `true` are grouped by the biome graph they link to (see [Scatter volume](#scatter-volume)), and each group is evaluated **once** for all of its volumes (see [Overlapping volumes](#overlapping-volumes)).
 3. The ground the group covers settles the [grid](#the-grid) that fields and textures are measured onto for the whole evaluation, before any node runs.
 4. It finds children of the graph root with **`NodeType`** = **`Output`** and evaluates each one.
-5. **`Output`** nodes follow **`ObjectValue`** wires to terminal **`PlaceGeometryOnPoints`** nodes.
+5. **`Output`** nodes follow **`ObjectValue`** wires to terminal **`PlaceGeometryOnPoints`** nodes, or to a pass-through node standing in front of one.
 6. Each node walks upstream through **`Points`** wires until it reaches a source **`ScatterPoints`** node. The rule being evaluated and the grid go down with the call, so every node in a chain sees them.
 7. Points pass through optional filters (exclusion volumes, terrain snap, slope/material filters) before geometry is cloned.
 
@@ -30,6 +30,7 @@ This document describes every node type, attribute, wire, tag, and volume settin
 | `Number` | Holds one number for other nodes to read |
 | `Reroute` | Hands on whatever is wired into it, so a wire can be routed around the canvas |
 | `PlaceGeometryOnPoints` | Clones and places asset geometry at each point |
+| `ParentInstancesTo` | Moves what a rule placed to somewhere else in the hierarchy |
 
 The biome root model uses **`NodeType`** = **`ScatterGraph`**. It is a container only and is not evaluated directly.
 
@@ -60,7 +61,7 @@ Each **`ObjectValue`** under **`Output`**:
 |----------|-------|
 | Name | Same as the rule (e.g. `Cypress_Tree_A`) |
 | **`NodeType`** | **`OutputNode`** |
-| **`Value`** | References that rule's terminal **`PlaceGeometryOnPoints`** node |
+| **`Value`** | References that rule's terminal **`PlaceGeometryOnPoints`** node, or a pass-through node standing in front of it ([`Reroute`](#reroute), [`ParentInstancesTo`](#parentinstancesto)) |
 
 ### Per-rule folder
 
@@ -74,8 +75,9 @@ The folder is an organising convention, not something evaluation depends on: nod
 |-----------|---------------|----------------|-------------|
 | `Points` | `ObjectValue` | `Points` | Upstream node that feeds this node |
 | `Asset` | `ObjectValue` (on `PlaceGeometryOnPoints` only) | `Asset` | In-scene template to clone (optional) |
+| `Parent` | `ObjectValue` (on `ParentInstancesTo` only) | `Parent` | Where in the hierarchy that node moves instances to |
 
-**`Points`** is an edge between two nodes, and is a port on the canvas. **`Asset`** is a reference into the scene, and is a row in the parameter panel.
+**`Points`** is an edge between two nodes, and is a port on the canvas. **`Asset`** and **`Parent`** are references into the scene, and are rows in the parameter panel.
 
 ### Data types
 
@@ -84,7 +86,7 @@ A wire between two nodes carries one of these kinds of thing, and each end of it
 | Data type | What it is | Produced by | Read by | Port colour |
 |-----------|------------|-------------|---------|-------------|
 | **Points** | A cloud of positions | `ScatterPoints`, `ScatterPointsAroundPoints`, `SnapPointsToTerrain` | `ScatterPointsAroundPoints`, `SnapPointsToTerrain`, `PlaceGeometryOnPoints` | Blue |
-| **Instances** | The geometry a rule has placed in the world | `PlaceGeometryOnPoints` | `Output` | Green |
+| **Instances** | The geometry a rule has placed in the world | `PlaceGeometryOnPoints`, `ParentInstancesTo` | `ParentInstancesTo`, `Output` | Green |
 | **SDF Grid 2D** | A shape on the ground measured onto a rectangle of cells as the signed distance to its edge, seen from above | `MaterialSDF2D` | `SDFThreshold2D` | Yellow |
 | **Texture 2D** | A greyscale image laid over the ground, read as [how much of a scatter survives where](#density-masking) | `SDFThreshold2D`, `NoiseTexture2D` | `ScatterPoints`, `ScatterPointsAroundPoints`, `SnapPointsToTerrain` | Salmon |
 | **Number** | A single value | `Number` | `SDFThreshold2D` | Violet |
@@ -391,6 +393,8 @@ Nothing to set: what it passes on is whatever is wired into it.
 
 **On the canvas it is a dot, not a card.** A reroute is drawn the size of a port, in the colour of what it carries: solid once something is wired into it and a ring around a hole while nothing is, which is how an empty port looks and how you can tell an unwired one at a glance. Both of its ends are that one point, so the wire arriving and the wires leaving meet there and the pair reads as a single bent wire. A card keeps its two gestures apart by geometry — the body is dragged to move it, the port on its edge to wire it — and a dot has no room for both, so it grows one: **drag the dot to move it, and point at it to bring up an output port on its right edge, which is what you drag from to wire it into another node.** The port goes away again when you point elsewhere, so a reroute at rest is just a dot. A wire is dropped onto it the same way as onto any other node. There is nowhere on a dot to print a name, so hovering one names it and says what it is carrying.
 
+**The Spreadsheet view does not list it.** That window is a column of nodes and their parameters, and a reroute has no parameters and nothing to say about the rule, so it would be a heading over an empty section between two nodes that do have something. The rule still reads through one — everything behind a reroute is listed as though it were wired straight on.
+
 **It has no type until it carries one.** An empty reroute is grey and accepts anything; from the moment something is wired in, it reads as that type and a wire of another type is turned down like any other mismatch. To re-aim one at a different kind of thing, break its input wire first — and check what it feeds still makes sense, since those wires were drawn when it carried something else.
 
 **It changes nothing about the evaluation.** A chain with reroutes in it produces exactly what the same chain without them would, point for point:
@@ -431,6 +435,31 @@ Terminal node. Clones a template model at each input point, applies scale, optio
 | *( omitted or other )* | No rotation applied beyond placement pivot. |
 
 **Color tinting:** Applied to `SurfaceAppearance` descendants of each `MeshPart`. Parts tagged **`NoTint`** (CollectionService) are skipped.
+
+**Output:** the instances it placed. Reaching this node is what makes the placement happen, so the [Output registry](#output-registry) does nothing with them; they are there for a node standing between the two, which today means [`ParentInstancesTo`](#parentinstancesto). Instances deferred by **`AvoidIntersections`** are included, since they exist by then — the ones that go on to lose are destroyed wherever they have been put.
+
+---
+
+### ParentInstancesTo
+
+Moves what a rule placed somewhere else in the hierarchy, and hands the same instances on. A rule's geometry lands in a folder per rule under `Workspace.ScatterGraphInstances`, which is where the plugin's own bookkeeping reads best; a place may want it somewhere else — inside a model that is streamed or moved as a unit, or under a folder that a level's own tooling walks — and this is how a graph says so.
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **`NodeType`** | `string` | Yes | **`ParentInstancesTo`** |
+
+| Wire | Required | Description |
+|------|----------|-------------|
+| **`Instances`** | Yes | The node whose placed instances this one moves. Nothing wired means nothing to move, and it warns. |
+| **`Parent`** | Yes | Where to move them to. A reference into the place rather than an edge between two nodes, so it is a row in the parameter panel: select the target in Studio, then set it there. |
+
+**Output:** the same instances, now reparented — so this node may sit between a terminal and the [Output registry](#output-registry), or in front of another one of these.
+
+**It is the one node that points into the place it is running in.** Every other node describes the scatter and nothing else, which is what lets one graph be shared between places. A **`Parent`** names a particular instance in a particular place, so a graph carrying one only works where that instance exists. Somewhere with a stable, conventional path — a folder every place is built with — is a far safer thing to aim at than a model belonging to one map.
+
+**A `Parent` that is not set, or points at something since deleted, is not fatal.** The node warns and leaves the instances where they were placed, rather than moving them out of the DataModel where nothing could reach them again. An unset **`Parent`** is also flagged on the canvas, with the red border and badge any node missing something it needs gets.
+
+**It does not disturb anything the plugin later does with a placement.** Both the sweep at the start of a run and Clear find instances by their [CollectionService tag](#collectionservice-tags) rather than by where they sit, so a moved instance is still swept, still [promoted](#persisting-hand-edits) if it has been edited by hand, and still cleared. Note that promoting one moves it out again, into `ScatterGraphPromoted`, since that is what taking it out of the system's hands means. Reparenting never moves anything in world space.
 
 ---
 
@@ -645,11 +674,14 @@ A rule that loses a large fraction of its placements between runs — usually a 
 | `Number` | `NodeType`, `Value` |
 | `Reroute` | `NodeType` *(its one input is a wire)* |
 | `PlaceGeometryOnPoints` | `NodeType`, `GeometryAssetID`, `ScaleRange`, `RotationType`, `ColorRange`, `AvoidIntersections`, `Radius`, `Priority`, `RuleId` |
+| `ParentInstancesTo` | `NodeType` *(its input and its `Parent` are both wires)* |
 | `Output` registry entry | `NodeType` = `OutputNode` |
 | Scatter volume | `Enabled`, `BiomeDefinitionAssetID` |
 | Exclusion volume | *(no attributes; `ObjectValue` children aim it — see [Exclusion volumes](#exclusion-volumes))* |
 | Wire: `Points` | `NodeType` = `Points` |
 | Wire: `Asset` | `NodeType` = `Asset` |
+| Wire: `Instances` | `NodeType` = `Instances` |
+| Wire: `Parent` | `NodeType` = `Parent` |
 | Wire: `Density` | `NodeType` = `Texture2D` |
 | Wire: `Input` | `NodeType` = whatever the [reroute](#reroute) carries |
 | Wire: `SDF` | `NodeType` = `SDFGrid2D` |

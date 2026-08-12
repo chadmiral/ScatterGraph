@@ -102,6 +102,7 @@ local PRODUCES: { [string]: DataType } = {
 	ScatterPointsAroundPoints = POINTS,
 	SnapPointsToTerrain = POINTS,
 	PlaceGeometryOnPoints = INSTANCES,
+	ParentInstancesTo = INSTANCES,
 	MaterialSDF2D = SDF_GRID_2D,
 	SDFThreshold2D = TEXTURE_2D,
 	NoiseTexture2D = TEXTURE_2D,
@@ -141,6 +142,13 @@ local INPUTS: { [string]: { Slot } } = {
 
 	PlaceGeometryOnPoints = {
 		{ name = "Points", dataType = POINTS, wireNodeType = POINTS },
+	},
+
+	-- Where it puts them is a reference into the place rather than a wire from
+	-- another node, so it is declared as a parameter in AttributeSchema and is not
+	-- a port here.
+	ParentInstancesTo = {
+		{ name = "Instances", dataType = INSTANCES, wireNodeType = INSTANCES },
 	},
 
 	-- The registry holds one entry per rule, so its slots are made as rules are

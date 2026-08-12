@@ -131,8 +131,9 @@ local ZOOM_WHEEL_STEP = 1.075
 -- A title bar is coloured by what its node does, so a chain reads at a glance:
 -- green makes points, teal derives more points from them, brown puts them on the
 -- ground, olive measures a field over it, rust turns something into a texture that
--- thins a scatter out, violet holds a value the rest read, blue places geometry,
--- and grey is the outlet the graph ends at. These are fixed rather than theme
+-- thins a scatter out, violet holds a value the rest read, blue places geometry
+-- and a paler blue moves it elsewhere in the hierarchy, and grey is the outlet
+-- the graph ends at. These are fixed rather than theme
 -- colours because they say which node type this is, not which part of the window
 -- it is. A reroute is not here: it has no title to colour, being drawn as a dot in
 -- the colour of whatever it is carrying.
@@ -145,6 +146,7 @@ local TITLE_COLORS = {
 	NoiseTexture2D = Color3.fromRGB(140, 84, 62),
 	Number = Color3.fromRGB(104, 78, 148),
 	PlaceGeometryOnPoints = Color3.fromRGB(78, 84, 134),
+	ParentInstancesTo = Color3.fromRGB(70, 104, 140),
 	Output = Color3.fromRGB(84, 84, 92),
 }
 -- A node type this window has never heard of still gets a card.
@@ -257,6 +259,16 @@ local NODE_TEMPLATES = {
 		name = "PlaceAssetOnPoints",
 		nodeType = "PlaceGeometryOnPoints",
 		attributes = { ScaleRange = Vector2.new(0.9, 1.1), RotationType = "UpAxis" },
+	},
+	{
+		-- Puts what the rule placed somewhere else in the hierarchy and hands it
+		-- on. Where is a reference into the place, set from the parameter panel
+		-- rather than here: an attribute cannot hold one, so the row makes the
+		-- ObjectValue the first time it is set.
+		label = "Parent Instances To",
+		name = "ParentInstancesTo",
+		nodeType = "ParentInstancesTo",
+		attributes = {},
 	},
 	{
 		-- A bend in a wire, for the canvas rather than the evaluation: it hands
