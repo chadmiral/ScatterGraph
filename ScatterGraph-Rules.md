@@ -621,6 +621,10 @@ Only **placed** entries are ever pruned. **promoted** and **removed** entries pe
 
 **What a run does.** Before placing, the run sweeps every tagged instance: an untouched one is destroyed and re-placed as before; an edited one is **promoted**. During placement, a point that is claimed or removed is skipped — while still drawing the same random values, so deleting one prop never restyles the ones scattered after it — and a placed point whose instance has vanished is recognised as a deletion and tombstoned. At the end, stale placed entries are pruned and the ledgers are written.
 
+**Running one graph at a time.** Both windows carry an **Evaluate Graph** button over the graph they are showing — the Graph View's on its top ribbon, the Spreadsheet view's beside **New Graph** and **Delete Graph**. It places that graph in every enabled volume pointed at it, exactly as a whole-place run would, and narrows the run to that graph's own placements: the sweep passes over every instance belonging to another graph, and the pruning at the end never opens another graph's book. So what the other graphs have placed is left standing, their hand edits are neither promoted nor forgotten, and their records come through byte for byte. A graph no enabled volume points at has nowhere to place anything, and says so rather than doing nothing.
+
+The toolbar's **Evaluate** is the same run with the narrowing taken off, and is still the way to place the whole place at once. Neither is a single undoable edit: a run places, destroys and promotes instances across the place, and writes down that it did.
+
 **Promotion** untags **`ScatterGraphInstance`**, tags **`ScatterGraphPromoted`**, and reparents the instance into a flat **`Workspace.ScatterGraphPromoted`** folder, keeping its **`ScatterRule`** and **`ScatterOrigin`**. A promoted instance keeps asserting its point on every later run, and is registered into that run's occupancy at its **current** position, so **`AvoidIntersections`** rules keep clear of where you actually put it. Delete a promoted instance and its point flips to **removed**.
 
 **Commands** (Spreadsheet View rule ribbon):

@@ -21,6 +21,10 @@
 	  removed   -- the author deleted it; never place here again.
 
 	A run reconciles at its start (the sweep) and prunes at its end (finishRun).
+	It may be narrowed to a single graph, which is what the button in each window
+	that evaluates the graph on screen does: both ends of the run then pass over
+	every placement belonging to another graph, so what those graphs put in the
+	world and wrote down about it comes through untouched.
 	Only `placed` entries are ever pruned; `promoted` and `removed` are kept
 	across runs, so raising a volume onto a new plane, or nudging one sideways
 	and back, never resurrects a prop the author threw away. They grow only when
@@ -173,13 +177,31 @@ end
 local Run = {}
 Run.__index = Run
 
-function PlacementLedger.beginRun()
+-- `onlyGraph` narrows the run to one graph's placements, for the button in each
+-- window that evaluates the graph on screen and nothing else. Every other
+-- graph's instances and books are then left exactly as the run found them: the
+-- sweep passes them over, and the pruning at the end never opens a book the run
+-- had no business reading. Left nil, the run covers the whole place, which is
+-- what the toolbar's Evaluate does.
+function PlacementLedger.beginRun(onlyGraph: string?)
 	local self = setmetatable({}, Run)
 	self.rules = {}
 	self.claimsByGraph = {}
 	self.recordsRoot = workspace:FindFirstChild(RECORDS_FOLDER)
 	self.promotedRoot = nil
+	self.onlyGraph = onlyGraph
 	return self
+end
+
+-- Is this placement one of the ones the run is allowed to touch? An instance
+-- the system cannot identify belongs to no graph in particular, so a run
+-- narrowed to one leaves it be rather than acting on another graph's behalf --
+-- a whole-place run still destroys it as the foreign thing it is.
+function Run:_inScope(identity): boolean
+	if self.onlyGraph == nil then
+		return true
+	end
+	return identity ~= nil and identity.graphKey == self.onlyGraph
 end
 
 -- Loads a rule's book on first mention and keeps it in memory for the rest of
@@ -276,6 +298,10 @@ function Run:sweep()
 		local storedStamp = instance:GetAttribute("ScatterStamp")
 		local identity = readIdentity(instance)
 
+		if not self:_inScope(identity) then
+			continue
+		end
+
 		if identity == nil or typeof(storedStamp) ~= "number" then
 			-- Legacy or foreign: destroyed as it was before any of this existed,
 			-- so the first run after this lands is a clean reset.
@@ -317,7 +343,7 @@ function Run:sweep()
 
 	for _, instance in CollectionService:GetTagged(PROMOTED_TAG) do
 		local identity = readIdentity(instance)
-		if identity ~= nil then
+		if identity ~= nil and self:_inScope(identity) then
 			local rule = self:_rule(identity.graphKey, identity.ruleKey)
 			local key = keyOf(
 				PlacementLedger.qmm(identity.origin.X),
@@ -444,6 +470,14 @@ end
 --                 rule as a field of deletions.
 function Run:finishRun()
 	for _, rule in self.rules do
+		-- Nothing outside a narrowed run's graph should have been read in the
+		-- first place, since the sweep passed those instances over. Checked
+		-- again here because this is where a book is rewritten, and a rule the
+		-- run never evaluated is one this would prune every live point from.
+		if self.onlyGraph ~= nil and rule.graphKey ~= self.onlyGraph then
+			continue
+		end
+
 		local kept = {}
 		for key, entry in rule.entries do
 			if entry.state == REMOVED then

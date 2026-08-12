@@ -292,15 +292,19 @@ local function collectVolumeGroups()
 	return groups
 end
 
-local function onPluginButtonClicked()
-	BrushToolActive = false
-	local terrain = workspace.Terrain
-
+local function ensureInstanceFolder()
 	if InstanceFolder == nil then
 		InstanceFolder = Instance.new("Folder")
 		InstanceFolder.Name = "ScatterGraphInstances"
 		InstanceFolder.Parent = workspace
 	end
+end
+
+local function onPluginButtonClicked()
+	BrushToolActive = false
+	local terrain = workspace.Terrain
+
+	ensureInstanceFolder()
 	
 	-- The sweep replaces the old clear: rather than destroying everything, it
 	-- promotes hand-edited instances out of the system and destroys only the
@@ -332,6 +336,54 @@ local function onPluginButtonClicked()
 
 	-- Tombstone the deletions the sweep and placement uncovered, prune the
 	-- points no rule wants any more, and write every book.
+	currentRun:finishRun()
+	currentRun = nil
+	currentGraphKey = nil
+end
+
+-- Evaluate one graph and leave the rest of the place alone, for the button each
+-- window puts over the graph it is showing. The whole-place Evaluate above is
+-- this with the scope taken off: the same sweep, the same placement pass, the
+-- same pruning at the end, all of it narrowed to the one graph's own placements
+-- so another graph's instances and books are not so much as read.
+--
+-- A graph is only ever placed inside the volumes pointed at it, so the volumes
+-- here are the ones this graph would have been given by a whole-place run. A
+-- graph no enabled volume names has nowhere to put anything, which is worth
+-- saying rather than doing nothing at.
+local function evaluateOneGraph(graph: Instance)
+	if graph == nil or not graph:IsDescendantOf(game) then
+		return
+	end
+
+	BrushToolActive = false
+	local terrain = workspace.Terrain
+	ensureInstanceFolder()
+
+	local volumes = {}
+	for _, group in collectVolumeGroups() do
+		if group.graph == graph then
+			for _, volume in group.volumes do
+				table.insert(volumes, volume)
+			end
+		end
+	end
+
+	if #volumes == 0 then
+		warn(
+			"ScatterGraph: no enabled scatter volume points at " .. graph.Name .. ", so there is nowhere to "
+				.. "place it. Point a volume's ObjectValue at this graph and tick its Enabled attribute."
+		)
+		return
+	end
+
+	local graphKey = PlacementLedger.graphKey(graph)
+	currentRun = PlacementLedger.beginRun(graphKey)
+	currentRun:sweep()
+	currentExclusionZones = Helpers.exclusionZones()
+
+	evaluateGraph(graph, VolumeGroup.new(volumes), terrain, graphKey)
+
 	currentRun:finishRun()
 	currentRun = nil
 	currentGraphKey = nil
@@ -386,8 +438,10 @@ clearButton.Click:Connect(onClearButtonClicked)
 promoteButton.Click:Connect(onPromoteButtonClicked)
 forgetButton.Click:Connect(onForgetButtonClicked)
 -- Each view owns its own button: clicking it toggles that view's dock widget.
-RulesWindow.install(plugin, spreadsheetViewButton)
-GraphView.install(plugin, graphViewButton)
+-- Both are handed the scoped evaluation so they can offer it over the graph they
+-- are showing; the evaluation itself stays here, with the rest of the run.
+RulesWindow.install(plugin, spreadsheetViewButton, evaluateOneGraph)
+GraphView.install(plugin, graphViewButton, evaluateOneGraph)
 --brushButton.Click:Connect(onBrushButtonClicked)
 --testButton.Click:Connect(onTestButtonClicked)
 

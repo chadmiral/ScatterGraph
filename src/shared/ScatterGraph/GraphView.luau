@@ -38,6 +38,11 @@
 	carries the whole handful at once, and Delete Node deletes all of them as a
 	single undo.
 
+	Evaluate Graph runs what is on screen and nothing else, so a graph can be
+	tuned and placed without disturbing what the other graphs in the place have
+	put down. The run itself belongs to the plugin script, which owns every other
+	pass over the place; this window only says which graph and when.
+
 	Where the nodes sit is the one thing on the canvas that is not already in
 	the graph. A node dragged to a new place keeps it in a GraphPosition
 	attribute; a node that has never been dragged is laid out in columns by how
@@ -508,7 +513,10 @@ end
 -- would be two views of one thing, each able to invalidate the other.
 local view = nil
 
-local function create(pluginRef: Plugin)
+-- evaluateGraph runs one graph and leaves the rest of the place alone. It lives
+-- with the rest of the evaluation, in the plugin script, and is handed here so
+-- the ribbon can offer it over the graph on screen.
+local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 	local widgetInfo = DockWidgetPluginGuiInfo.new(Enum.InitialDockState.Float, false, false, 940, 560, 560, 320)
 	local widget = pluginRef:CreateDockWidgetPluginGui("ScatterGraphGraphView", widgetInfo)
 	widget.Name = "ScatterGraphGraphView"
@@ -2665,6 +2673,18 @@ local function create(pluginRef: Plugin)
 		end
 	end
 
+	-- Runs the graph on screen and nothing else. Not wrapped in a recording: a
+	-- run places, promotes and destroys instances across the place and keeps a
+	-- record of having done so, which is not one edit to be stepped back over,
+	-- and the toolbar's Evaluate does not pretend otherwise either.
+	local function evaluateCurrentGraph()
+		if evaluateGraph == nil or graph == nil or not graph:IsDescendantOf(game) then
+			return
+		end
+
+		evaluateGraph(graph)
+	end
+
 	-- Drops down every graph in the place, the same list the Spreadsheet view's
 	-- first column shows, with the one on screen ticked. Picking another shows it.
 	local function openGraphChooser()
@@ -2865,6 +2885,16 @@ local function create(pluginRef: Plugin)
 				.. "until they are pointed somewhere else. Undo brings it back.",
 			requires = "graph",
 			activate = deleteGraph,
+		}).Parent = graphButtons
+
+		addRibbonButton({
+			icon = "\u{1F332}",
+			label = "Evaluate Graph",
+			tooltip = "Places the graph on screen, in every enabled volume pointed at it. Only this graph is "
+				.. "run: what other graphs have placed is left standing, and their record of it is left "
+				.. "alone. The toolbar's Evaluate does the whole place at once.",
+			requires = "graph",
+			activate = evaluateCurrentGraph,
 		}).Parent = graphButtons
 
 		local addButton
@@ -3326,9 +3356,9 @@ end
 
 -- The button owns the window: clicking it opens the graph the selection names,
 -- or closes the window if it is already up.
-function GraphView.install(pluginRef: Plugin, button: PluginToolbarButton)
+function GraphView.install(pluginRef: Plugin, button: PluginToolbarButton, evaluateGraph: ((Instance) -> ())?)
 	if view == nil then
-		view = create(pluginRef)
+		view = create(pluginRef, evaluateGraph)
 	end
 
 	view.attach(button)

@@ -22,10 +22,13 @@
 	at the moment its button is clicked.
 
 	The two ribbon rows along the top edit what the panes below them show. The
-	upper row makes and deletes whole graphs; the lower one deletes the selected
-	rule or adds one of the three chains that cover almost every rule in
-	practice. Every edit goes through GraphUi's `recorded`, so ctrl-Z undoes it
-	like any other Studio change.
+	upper row makes and deletes whole graphs, and runs the selected one; the
+	lower one deletes the selected rule or adds one of the three chains that
+	cover almost every rule in practice. Every edit goes through GraphUi's
+	`recorded`, so ctrl-Z undoes it like any other Studio change -- except
+	running a graph, which is not an edit to this window's contents at all but a
+	pass over the place, and is left to the plugin script that owns the rest of
+	the evaluation.
 ]]
 
 local Selection = game:GetService("Selection")
@@ -133,7 +136,10 @@ local function deleteRule(graph: Instance, output: ObjectValue, allOutputs: { Ob
 	end
 end
 
-function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
+-- evaluateGraph runs one graph and leaves the rest of the place alone. It lives
+-- with the rest of the evaluation, in the plugin script, and is handed here so
+-- the ribbon can offer it over the graph this window has selected.
+function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton, evaluateGraph: ((Instance) -> ())?)
 	-- Three panes side by side need a wider window than two did.
 	local widgetInfo = DockWidgetPluginGuiInfo.new(Enum.InitialDockState.Float, false, false, 720, 400, 460, 240)
 	-- The id stays as it was named, whatever the window is called: it is what
@@ -326,6 +332,19 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 		refresh()
 	end
 
+	-- Runs the selected graph and nothing else. Not wrapped in a recording: a
+	-- run places, promotes and destroys instances across the place and keeps a
+	-- record of having done so, which is not one edit to be stepped back over,
+	-- and the toolbar's Evaluate does not pretend otherwise either.
+	local function evaluateCurrentGraph()
+		local graph = activeGraph()
+		if evaluateGraph == nil or graph == nil then
+			return
+		end
+
+		evaluateGraph(graph)
+	end
+
 	-- spec: { icon, label, tooltip, requires, activate }, where requires is
 	-- "none", "graph" or "output" -- what has to be selected for the button to
 	-- do anything.
@@ -474,6 +493,15 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton)
 				.. "until they are pointed somewhere else. Undo brings it back.",
 			requires = "graph",
 			activate = deleteCurrentGraph,
+		}).Parent = graphRibbon
+		addRibbonButton({
+			icon = "\u{1F332}",
+			label = "Evaluate Graph",
+			tooltip = "Places the selected graph, in every enabled volume pointed at it. Only this graph is "
+				.. "run: what other graphs have placed is left standing, and their record of it is left "
+				.. "alone. The toolbar's Evaluate does the whole place at once.",
+			requires = "graph",
+			activate = evaluateCurrentGraph,
 		}).Parent = graphRibbon
 		addRibbonButton({
 			icon = "\u{274C}",
