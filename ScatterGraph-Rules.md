@@ -13,7 +13,7 @@ This document describes every node type, attribute, wire, tag, and volume settin
 3. The ground the group covers settles the [grid](#the-grid) that fields and textures are measured onto for the whole evaluation, before any node runs.
 4. It finds children of the graph root with **`NodeType`** = **`Output`** and evaluates each one.
 5. **`Output`** nodes follow **`ObjectValue`** wires to terminal **`PlaceGeometryOnPoints`** nodes, or to a pass-through node standing in front of one.
-6. Each node walks upstream through **`Points`** wires until it reaches a source **`ScatterPoints`** node. The rule being evaluated and the grid go down with the call, so every node in a chain sees them.
+6. Each node walks upstream through **`Points`** wires until it reaches a source **`ScatterPoints`** node. The rule being evaluated and the grid go down with the call, so every node in a chain sees them. A chain is a line unless it holds a [merge](#mergepoints), which reads several of them and hands on all of it as one.
 7. Points pass through optional filters (exclusion volumes, terrain snap, slope/material filters) before geometry is cloned.
 
 **Registered node types** (the `NodeType` attribute must match exactly):
@@ -29,8 +29,10 @@ This document describes every node type, attribute, wire, tag, and volume settin
 | `NoiseTexture2D` | Fills a density texture with Perlin noise, to break a scatter up in soft patches |
 | `Number` | Holds one number for other nodes to read |
 | `Reroute` | Hands on whatever is wired into it, so a wire can be routed around the canvas |
+| `MergePoints` | Reads several chains of points and hands on all of them together |
 | `PlaceGeometryOnPoints` | Clones and places asset geometry at each point |
 | `ParentInstancesTo` | Moves what a rule placed to somewhere else in the hierarchy |
+| `MergeInstances` | Reads several terminals and hands on everything they placed together |
 
 The biome root model uses **`NodeType`** = **`ScatterGraph`**. It is a container only and is not evaluated directly.
 
@@ -74,10 +76,14 @@ The folder is an organising convention, not something evaluation depends on: nod
 | Wire name | Instance type | **`NodeType`** | **`Value`** |
 |-----------|---------------|----------------|-------------|
 | `Points` | `ObjectValue` | `Points` | Upstream node that feeds this node |
+| `Instances` | `ObjectValue` (on `ParentInstancesTo` only) | `Instances` | Upstream node whose placements it moves |
+| *(named after the node it comes from)* | `ObjectValue` (on a [merge](#mergepoints) only) | `Points` or `Instances` | One of the several nodes that merge reads |
 | `Asset` | `ObjectValue` (on `PlaceGeometryOnPoints` only) | `Asset` | In-scene template to clone (optional) |
 | `Parent` | `ObjectValue` (on `ParentInstancesTo` only) | `Parent` | Where in the hierarchy that node moves instances to |
 
-**`Points`** is an edge between two nodes, and is a port on the canvas. **`Asset`** and **`Parent`** are references into the scene, and are rows in the parameter panel.
+**`Points`**, **`Instances`** and a merge's inputs are edges between two nodes, and are ports on the canvas. **`Asset`** and **`Parent`** are references into the scene, and are rows in the parameter panel.
+
+A merge's inputs are the one case where **the wire's name is not fixed**: there is a wire per input rather than a declared slot to fill, so each is named after the node it comes from (`ScatterPoints`, `ScatterPoints2`) exactly as an [`Output`](#output-registry) entry is named after its rule. Nothing reads those names but the canvas, which lists them in alphabetical order and merges them in that order too.
 
 ### Data types
 
@@ -85,8 +91,8 @@ A wire between two nodes carries one of these kinds of thing, and each end of it
 
 | Data type | What it is | Produced by | Read by | Port colour |
 |-----------|------------|-------------|---------|-------------|
-| **Points** | A cloud of positions | `ScatterPoints`, `ScatterPointsAroundPoints`, `SnapPointsToTerrain` | `ScatterPointsAroundPoints`, `SnapPointsToTerrain`, `PlaceGeometryOnPoints` | Blue |
-| **Instances** | The geometry a rule has placed in the world | `PlaceGeometryOnPoints`, `ParentInstancesTo` | `ParentInstancesTo`, `Output` | Green |
+| **Points** | A cloud of positions | `ScatterPoints`, `ScatterPointsAroundPoints`, `SnapPointsToTerrain`, `MergePoints` | `ScatterPointsAroundPoints`, `SnapPointsToTerrain`, `MergePoints`, `PlaceGeometryOnPoints` | Blue |
+| **Instances** | The geometry a rule has placed in the world | `PlaceGeometryOnPoints`, `ParentInstancesTo`, `MergeInstances` | `ParentInstancesTo`, `MergeInstances`, `Output` | Green |
 | **SDF Grid 2D** | A shape on the ground measured onto a rectangle of cells as the signed distance to its edge, seen from above | `MaterialSDF2D` | `SDFThreshold2D` | Yellow |
 | **Texture 2D** | A greyscale image laid over the ground, read as [how much of a scatter survives where](#density-masking) | `SDFThreshold2D`, `NoiseTexture2D` | `ScatterPoints`, `ScatterPointsAroundPoints`, `SnapPointsToTerrain` | Salmon |
 | **Number** | A single value | `Number` | `SDFThreshold2D` | Violet |
@@ -277,6 +283,30 @@ Set via `SetAttribute("SlopeFilter", NumberSequence.new(...))` in Studio so the 
 
 ---
 
+### MergePoints
+
+Reads every node wired into it and hands on all of their points together. It is how one chain treats several: two scatters at different spacings, or a scatter and the clusters grown around it, become one cloud that is snapped to the ground once, thinned by one density and placed by one terminal — rather than each chain carrying its own copy of that arrangement to be kept in step by hand.
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **`NodeType`** | `string` | Yes | **`MergePoints`** |
+
+No attributes: how many inputs it has is said by the wires themselves.
+
+| Wire | Required | Description |
+|------|----------|-------------|
+| *(one per input, named after the node it comes from)* | No | A node producing points. Any number of them; none is an empty cloud, with a warning. |
+
+**Inputs are made as they are wired,** like the [`Output`](#output-registry) registry's entries rather than like a declared slot. The card carries a port per input and an empty **(add points)** port under them; dropping a wire on the empty one adds an input, and breaking a wire removes that input's port rather than leaving it empty. Dropping a wire anywhere on the body of the card adds an input too.
+
+**Output:** a [Points](#data-types) cloud holding every point from every input, in the order the card lists them — alphabetically by input name. The order matters only in that it has to be settled: each point in turn draws from the run's random stream for its scale and rotation, so an order that changed between runs would reshuffle the placement.
+
+**Points are not compared as they are merged.** Two clouds over the same ground are two points wherever they land in the same spot, and the spacing a scatter is built to is its own: two scatters at 40 studs merged into one are 40 studs apart within each cloud and as close as they like between them. For spacing *between* merged clouds, see [`AvoidIntersections`](#cross-branch-intersection-avoidance) on the terminal.
+
+**Two inputs pointing at the same node** is read once, with a warning — reading it twice would not give the same answer twice over, since a scatter thinned by a density draws from the random stream as it goes. Two inputs that lead back to the same node *further* upstream is not something the merge can see, and that node is then evaluated once for each way round to it.
+
+---
+
 ### MaterialSDF2D
 
 Source node. Measures where named terrain materials are into a flat signed distance field over the ground being scattered: every cell holds how far it is from the nearest ground whose surface is one of those materials, negative on the material itself. Wire it into [`SDFThreshold2D`](#sdfthreshold2d) to turn that into ground a rule may or may not plant on.
@@ -299,6 +329,8 @@ Materials are named as strings, which is what keeps the node place-agnostic: a g
 - **Where it is measured.** Over [the ground the scatter volumes set](#the-grid), which the node does not choose, divided into cells of its own **`VoxelSize`**, which it does.
 - **What the numbers mean.** Zero on the boundary between the material and everything else, negative on it, positive off it, in studs. Distances are measured from cell centre to cell centre and then brought half a cell in, which puts the zero crossing on the edges the two sides share. A voxel one tenth full of water is water: anything keeping clear of a shoreline should keep clear of all of it. A cell counts as the material if any part of a terrain voxel of it lies in there — so a coarse cell takes in several terrain columns and a fine one is one of several taking in the same column — which spreads the material out rather than dropping it.
 - **When there is none of it.** A material that is nowhere on the surface in range leaves every cell reading as astronomically far away, not zero, so a texture cut from it comes out white everywhere and thins nothing — rather than black everywhere, which would remove the scatter entirely.
+
+Once the graph has been run, the node's card in the Graph View shows [the field it measured](#seeing-what-a-node-measured): dark on the material, light off it, tinted the yellow the type's wires are. Hovering it gives how far into the material and how far clear of it the picture runs, which is the quickest way to see whether a **`Distance`** you have in mind is a large part of that ground or a sliver of it.
 
 **Cost:** the terrain is read a patch at a time, top down, and each patch stops being read as soon as every column in it has found its surface — so nothing below the ground is read at all. The distances are then worked out with a separable exact distance transform, two passes over the cells rather than a search around each one. Measuring the Elwynn biome's field takes about 200 ms, nearly all of it reading terrain. The field is measured once per evaluation however many nodes read it.
 
@@ -331,7 +363,7 @@ Since a field reads negative on the material it measures:
 
 **Output:** a [Texture 2D](#data-types) on the field's own cells, so nothing is resampled and the edge lands exactly where the field puts it. Reading between cells then leaves that edge soft by about a cell, which dithers the boundary instead of drawing a line across the scatter — of 5,506 candidates over the Elwynn biome, a few hundred fall in that band.
 
-Once the graph has been run, the node's card in the Graph View shows [the texture it made](#seeing-a-texture).
+Once the graph has been run, the node's card in the Graph View shows [the texture it made](#seeing-what-a-node-measured).
 
 A field naming a material the place does not have reads as astronomically far away everywhere, so cutting it gives an all-white texture that thins nothing, rather than a black one that removes everything.
 
@@ -358,7 +390,7 @@ Source node. Fills a [density texture](#density-masking) with Perlin noise: soft
 - **Mid grey on average.** Over the Elwynn biome the mean is 0.503 and about half of any scatter survives it. Roughly a tenth of the ground is dark enough to be nearly bare and a tenth pale enough to be nearly untouched.
 - **It clips at the ends.** Roblox's noise mostly keeps within half a unit of zero but overshoots on a few cells in a hundred, and those clamp to solid black or white — which is what puts the occasional bare clearing and solid thicket in an otherwise probabilistic texture.
 
-Once the graph has been run, the node's card in the Graph View shows [the texture it made](#seeing-a-texture), which is the quickest way to settle a **`Scale`**.
+Once the graph has been run, the node's card in the Graph View shows [the texture it made](#seeing-what-a-node-measured), which is the quickest way to settle a **`Scale`**.
 
 ---
 
@@ -467,6 +499,30 @@ Moves what a rule placed somewhere else in the hierarchy, and hands the same ins
 
 ---
 
+### MergeInstances
+
+Reads every terminal wired into it and hands on everything they placed, together. It is what lets one rule end in more than one kind of geometry: an [`Output`](#output-registry) entry takes a single wire, so a rule was a single terminal, and two kinds of tree meant two rules with anything done to them afterwards done twice. Wire both terminals into a merge and one [`ParentInstancesTo`](#parentinstancesto) behind it moves the lot, or one **`Output`** entry accounts for the lot.
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **`NodeType`** | `string` | Yes | **`MergeInstances`** |
+
+No attributes: how many inputs it has is said by the wires themselves.
+
+| Wire | Required | Description |
+|------|----------|-------------|
+| *(one per input, named after the node it comes from)* | No | A node producing instances — a terminal, or another node that hands them on. Any number of them; none is an empty rule, with a warning. |
+
+Its inputs work exactly as [`MergePoints`](#mergepoints)' do: made as they are wired, with an empty **(add instances)** port at the bottom of the card to add another.
+
+**Output:** an [Instances](#data-types) list holding everything every input placed, in the order the card lists them.
+
+**Everything reached through it is placed under the one rule.** The rule's identity travels down every input, so both terminals stamp and record under the same rule: they are swept, [promoted and cleared](#persisting-hand-edits) together, and they write into one rule's book. Their instances also land in that one rule's folder under `ScatterGraphInstances`, both kinds in the one folder, which is worth knowing before wondering why a rule's folder holds two sorts of thing.
+
+**Merging is not placing.** The instances exist before they arrive — placing them is what the terminals behind it did — so a merge cannot un-place anything, and one wired to nothing is a rule that placed nothing rather than one that placed something and lost it. For the same reason, two inputs that lead back to one terminal make it place its geometry twice; the merge warns about the case it can see, two of its own inputs pointing at the same node, and reads it once.
+
+---
+
 ### Output
 
 Graph entry point. Evaluates every child **`ObjectValue`** (each pointing at a rule's **`PlaceGeometryOnPoints`** node).
@@ -558,15 +614,30 @@ Each texture is built once per evaluation however many rules read it.
 
 **Making one:** [`SDFThreshold2D`](#sdfthreshold2d) cuts a [distance field](#materialsdf2d) into black and white — keep off the water, hold a clearing around the road. [`NoiseTexture2D`](#noisetexture2d) fills one with soft blotches to break a scatter up. Wiring both, on two nodes of one chain, gives patchy ground cover that also respects the roads.
 
-### Seeing a texture
-
-A node that makes a texture draws it on its own card in the Graph View, as a small greyscale thumbnail along the bottom: the ground seen from above, in the shape the volumes actually cover, with white where the texture keeps everything and black where it keeps nothing.
-
-**It appears only once the node has been evaluated**, since until then there is no texture to draw — a graph opened without being run shows plain cards. Running it fills them in. Each run first blanks the cards of the graph it is about to run, so a picture is always of the last run that could have made it, and a node cut out of its graph goes back to showing nothing rather than keeping a picture of when it still mattered. [Evaluate Graph](#persisting-hand-edits) blanks only its own graph's cards, as it leaves everything else about the other graphs alone.
-
-The thumbnail is averaged down rather than sampled, so fine noise reads as the grey it averages to instead of turning into a coarser, harsher pattern that is not what the scatter is measured against. Hovering it gives the texture's size in cells and in studs.
-
 **A flat one:** a [`Number`](#number) wired straight into a **`Density`** port is [read as a texture](#conversions) of that one shade, which thins a rule by a fixed fraction everywhere — `0.3` keeps about a third of its candidates, wherever they stand. It is the simplest way to make one rule sparser without touching its spacing, and one `Number` wired into several rules thins them all together.
+
+---
+
+## Seeing what a node measured
+
+The three nodes that measure something over the ground — [`MaterialSDF2D`](#materialsdf2d), [`SDFThreshold2D`](#sdfthreshold2d) and [`NoiseTexture2D`](#noisetexture2d) — draw what they made on their own cards in the Graph View, as a small thumbnail along the bottom: the ground seen from above, in the shape the volumes actually cover.
+
+**A picture appears only once the node has been evaluated**, since until then there is nothing to draw — a graph opened without being run shows plain cards, and running it fills them in. Each run first blanks the cards of the graph it is about to run, so a picture is always of the last run that could have made it, and a node cut out of its graph goes back to showing nothing rather than keeping a picture of when it still mattered. [Evaluate Graph](#persisting-hand-edits) blanks only its own graph's cards, as it leaves everything else about the other graphs alone.
+
+The two kinds of picture are shaded differently, because their numbers mean different things:
+
+| | [Texture 2D](#data-types) | [SDF Grid 2D](#data-types) |
+|-|---------------------------|----------------------------|
+| **Drawn** | Grey, as the shades it already is | Tinted the yellow its wires and ports are |
+| **Black** | Keeps no candidate standing there | The deepest the picture goes into the material |
+| **Mid grey** | An even chance | The edge of the material |
+| **White** | Keeps every candidate | The furthest the picture stands from it |
+
+A texture is a shade already — nought to one, black to white — so it is drawn as exactly that, and grey on the card means the chance it means everywhere else. A field is studs, signed, and runs as far as the ground it covers, so it is stretched to fill the ramp instead. **Each side of the material is stretched by its own extreme**, not both by the larger: grass covers most of a forest, and its field over the Elwynn biome runs 355 studs deep inside it but only 58 studs clear of it, so one scale over both would flatten the ground around the grass — the part a threshold is nearly always cut from — into a couple of dozen shades. A field's picture therefore says where things are rather than how far, and **hovering it gives the two distances it was stretched by**, along with the size in cells and studs that hovering any of them gives.
+
+A material the place does not have reads as astronomically far away everywhere, so its card is a flat, featureless yellow, and hovering says something like *4e+10 studs clear* — which is the quickest way to spot a mistyped material name.
+
+Thumbnails are averaged down rather than sampled, so fine noise reads as the grey it averages to instead of turning into a coarser, harsher pattern that is not what the scatter is measured against.
 
 ---
 
@@ -689,8 +760,10 @@ A rule that loses a large fraction of its placements between runs — usually a 
 | `NoiseTexture2D` | `NodeType`, `Scale`, `Phase`, `VoxelSize` |
 | `Number` | `NodeType`, `Value` |
 | `Reroute` | `NodeType` *(its one input is a wire)* |
+| `MergePoints` | `NodeType` *(one wire per input, however many there are)* |
 | `PlaceGeometryOnPoints` | `NodeType`, `GeometryAssetID`, `ScaleRange`, `RotationType`, `ColorRange`, `AvoidIntersections`, `Radius`, `Priority`, `RuleId` |
 | `ParentInstancesTo` | `NodeType` *(its input and its `Parent` are both wires)* |
+| `MergeInstances` | `NodeType` *(one wire per input, however many there are)* |
 | `Output` registry entry | `NodeType` = `OutputNode` |
 | Scatter volume | `Enabled`, `BiomeDefinitionAssetID` |
 | Exclusion volume | *(no attributes; `ObjectValue` children aim it — see [Exclusion volumes](#exclusion-volumes))* |
@@ -702,6 +775,7 @@ A rule that loses a large fraction of its placements between runs — usually a 
 | Wire: `Input` | `NodeType` = whatever the [reroute](#reroute) carries |
 | Wire: `SDF` | `NodeType` = `SDFGrid2D` |
 | Wire: `Distance` | `NodeType` = `Number` |
+| Wire: a [merge](#mergepoints) input | `NodeType` = `Points` or `Instances`; named after the node it comes from |
 
 A **`PlaceGeometryOnPoints`** node added from a rule template also carries
 **`RuleId`** (a `string` GUID), the rule's durable identity for the records that
@@ -727,7 +801,7 @@ lists. Deleting it just returns the node to the automatic column layout.
 | `src/shared/ScatterGraph/GridLayout2D.luau` | Where the flat [grid](#the-grid) every field and texture of one evaluation shares sits over the ground, and how a value is read back out of one at a world position |
 | `src/shared/ScatterGraph/SDFGrid2D.luau` | A shape on the ground measured onto that grid as the distance to it, from cells already marked off as `MaterialSDF2D` marks them |
 | `src/shared/ScatterGraph/Texture2D.luau` | A greyscale image on that grid, filled cell by cell or from a function of position, and read as a [density](#density-masking) |
-| `src/shared/ScatterGraph/TexturePreview.luau` | The thumbnail of each texture a run made, shrunk once and kept against the node that made it, for the Graph view to draw on its card |
+| `src/shared/ScatterGraph/TexturePreview.luau` | The thumbnail of each texture and field a run made, shrunk once and kept against the node that made it, for the Graph view to [draw on its card](#seeing-what-a-node-measured) |
 | `src/shared/ScatterGraph/RulesWindow.luau` | "Spreadsheet View" dock widget: lists the place's graphs and the chosen graph's outputs, edits the attributes and Asset wire of the nodes feeding each one, and adds or deletes both graphs and rules |
 | `src/shared/ScatterGraph/GraphView.luau` | "Graph View" dock widget: one graph as a canvas of wired nodes that can be added, moved, rewired and deleted, beside the parameters of the selected node |
 | `src/shared/ScatterGraph/Graphs.luau` | Which graphs the place holds, and which one the Studio selection names for the Graph View button to open |
@@ -742,3 +816,4 @@ lists. Deleting it just returns the node to the automatic column layout.
 | `src/shared/ScatterGraph/PlacementStamp.luau` | The deep fingerprint one placed instance folds down to, for telling an untouched placement from a hand-edited one |
 | `src/shared/ScatterGraph/PlacementLedger.luau` | The durable per-rule record of placed, promoted and removed points that persists hand edits across runs |
 | `src/shared/ScatterGraph/Nodes/` | Per-node evaluation logic |
+| `src/shared/ScatterGraph/Nodes/MergeNode.luau` | What both merges do — read every node wired in and hand on all of it — with [`MergePointsNode`](#mergepoints) and [`MergeInstancesNode`](#mergeinstances) naming which of the two things it is |

@@ -83,6 +83,12 @@ export type Slot = {
 	-- One slot per wire already there, plus an empty one to add another, rather
 	-- than the single slot a named entry describes.
 	repeated: boolean?,
+	-- What that empty one is called on the card, and what it says when pointed
+	-- at. Only a repeated slot has one, and what it should say depends on what
+	-- adding a wire to it means: another rule registered, or another thing
+	-- merged in.
+	newLabel: string?,
+	newTooltip: string?,
 }
 
 -- The node that carries whatever is wired into it, and the slot it does that on.
@@ -94,15 +100,18 @@ DataTypes.REROUTE_INPUT = REROUTE_INPUT
 
 -- What a node hands downstream, by NodeType. The scattering and filtering nodes
 -- make points; the terminal node turns them into geometry, and so passes
--- instances on to the Output registry. Output produces nothing -- it is where
--- the graph ends -- and so has no port to colour, and Reroute produces whatever
--- reaches it rather than anything of its own.
+-- instances on to the Output registry. A merge produces whichever of the two it
+-- merges, being several chains of that thing read as one. Output produces
+-- nothing -- it is where the graph ends -- and so has no port to colour, and
+-- Reroute produces whatever reaches it rather than anything of its own.
 local PRODUCES: { [string]: DataType } = {
 	ScatterPoints = POINTS,
 	ScatterPointsAroundPoints = POINTS,
 	SnapPointsToTerrain = POINTS,
+	MergePoints = POINTS,
 	PlaceGeometryOnPoints = INSTANCES,
 	ParentInstancesTo = INSTANCES,
+	MergeInstances = INSTANCES,
 	MaterialSDF2D = SDF_GRID_2D,
 	SDFThreshold2D = TEXTURE_2D,
 	NoiseTexture2D = TEXTURE_2D,
@@ -154,7 +163,35 @@ local INPUTS: { [string]: { Slot } } = {
 	-- The registry holds one entry per rule, so its slots are made as rules are
 	-- registered rather than declared here.
 	Output = {
-		{ dataType = INSTANCES, wireNodeType = "OutputNode", repeated = true },
+		{
+			dataType = INSTANCES,
+			wireNodeType = "OutputNode",
+			repeated = true,
+			newLabel = "(new rule)",
+			newTooltip = "An empty slot. Drop a wire here to register another rule with this Output.",
+		},
+	},
+
+	-- However many chains are wired in, which is not for this to say: a merge is
+	-- one slot per input and an empty one to add another, the way the registry is.
+	MergePoints = {
+		{
+			dataType = POINTS,
+			wireNodeType = POINTS,
+			repeated = true,
+			newLabel = "(add points)",
+			newTooltip = "An empty slot. Drop a wire here to merge another node's points in.",
+		},
+	},
+
+	MergeInstances = {
+		{
+			dataType = INSTANCES,
+			wireNodeType = INSTANCES,
+			repeated = true,
+			newLabel = "(add instances)",
+			newTooltip = "An empty slot. Drop a wire here to merge another node's instances in.",
+		},
 	},
 }
 

@@ -43,6 +43,12 @@
 	put down. The run itself belongs to the plugin script, which owns every other
 	pass over the place; this window only says which graph and when.
 
+	A node that measures something over the ground grows a strip along the bottom
+	of its card with a thumbnail of what it last made in it (see TexturePreview),
+	which is the one thing on the canvas that comes from a run rather than from
+	the graph. There is nothing to draw until the graph has been run, so the strip
+	is not there at all until then and the card is its old height.
+
 	Where the nodes sit is the one thing on the canvas that is not already in
 	the graph. A node dragged to a new place keeps it in a GraphPosition
 	attribute; a node that has never been dragged is laid out in columns by how
@@ -144,8 +150,11 @@ local ZOOM_WHEEL_STEP = 1.075
 -- green makes points, teal derives more points from them, brown puts them on the
 -- ground, olive measures a field over it, rust turns something into a texture that
 -- thins a scatter out, violet holds a value the rest read, blue places geometry
--- and a paler blue moves it elsewhere in the hierarchy, and grey is the outlet
--- the graph ends at. These are fixed rather than theme
+-- and a paler blue moves it elsewhere in the hierarchy, a flat grey-green joins
+-- several chains into one, and grey is the outlet the graph ends at. Both merges
+-- are the one colour: what a title says is what the node does to what it is
+-- given, and they do the same thing -- which of the two kinds of thing it is
+-- being done to is what the ports are coloured for. These are fixed rather than theme
 -- colours because they say which node type this is, not which part of the window
 -- it is. A reroute is not here: it has no title to colour, being drawn as a dot in
 -- the colour of whatever it is carrying.
@@ -159,6 +168,8 @@ local TITLE_COLORS = {
 	Number = Color3.fromRGB(104, 78, 148),
 	PlaceGeometryOnPoints = Color3.fromRGB(78, 84, 134),
 	ParentInstancesTo = Color3.fromRGB(70, 104, 140),
+	MergePoints = Color3.fromRGB(72, 100, 96),
+	MergeInstances = Color3.fromRGB(72, 100, 96),
 	Output = Color3.fromRGB(84, 84, 92),
 }
 -- A node type this window has never heard of still gets a card.
@@ -241,6 +252,14 @@ local NODE_TEMPLATES = {
 		attributes = { MaterialFilter = "Water", SlopeFilter = NumberSequence.new(1, 0) },
 	},
 	{
+		-- Several chains of points read as one. Its slots are made as they are
+		-- wired, so it starts with nothing but the empty one to drop a wire on.
+		label = "Merge Points",
+		name = "MergePoints",
+		nodeType = "MergePoints",
+		attributes = {},
+	},
+	{
 		label = "Material SDF 2D",
 		name = "MaterialSDF2D",
 		nodeType = "MaterialSDF2D",
@@ -280,6 +299,14 @@ local NODE_TEMPLATES = {
 		label = "Parent Instances To",
 		name = "ParentInstancesTo",
 		nodeType = "ParentInstancesTo",
+		attributes = {},
+	},
+	{
+		-- What several terminals placed, read as one, so a rule can end in more
+		-- than one kind of geometry.
+		label = "Merge Instances",
+		name = "MergeInstances",
+		nodeType = "MergeInstances",
 		attributes = {},
 	},
 	{
@@ -396,6 +423,16 @@ local function gridTile(size: number): Content?
 	return gridTiles[size]
 end
 
+-- A distance in studs, for a card to say out loud. Whole studs, because a
+-- picture measured in cells four studs across cannot mean anything finer -- and
+-- in the short form past ten thousand, which is not a distance anything in a
+-- place is at but is exactly what a field for a material the place does not have
+-- reads everywhere, and reads better as 1e+10 than as eleven digits.
+local function studLength(distance: number): string
+	local whole = math.round(distance)
+	return if whole < 10000 then tostring(whole) else string.format("%g", whole)
+end
+
 -- The part of a segment that falls inside a rectangle, or nothing if none of it
 -- does. Liang-Barsky: the segment is walked as a fraction of itself, and each
 -- edge of the rectangle either brings the near end forward or the far end back.
@@ -490,7 +527,12 @@ local function inputPortsOf(node: Instance)
 				table.insert(ports, entry)
 			end
 
-			table.insert(ports, { name = "(new rule)", isNew = true, slot = slot, dataType = slot.dataType })
+			table.insert(ports, {
+				name = slot.newLabel or "(add input)",
+				isNew = true,
+				slot = slot,
+				dataType = slot.dataType,
+			})
 		else
 			table.insert(ports, {
 				name = slot.label or slot.name,
@@ -1396,10 +1438,12 @@ local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 					and point.Y <= origin.Y + nodeHeight(node)
 
 				if within then
-					-- On the Output node the free slot is the one at the bottom;
-					-- dropping on the body should add a rule, not quietly
-					-- repoint one that is already there.
-					local fallback = if isOutput(node) then ports[#ports] else ports[1]
+					-- On a node whose slots are made as they are wired -- the
+					-- Output registry, either merge -- the free slot is the empty
+					-- one at the bottom, and dropping on the body should take that
+					-- rather than quietly repoint a wire that is already there.
+					local last = ports[#ports]
+					local fallback = if last.isNew then last else ports[1]
 
 					if dataType ~= nil then
 						for _, port in ports do
@@ -2101,10 +2145,43 @@ local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 		end
 	end
 
-	-- What this node made, last time it was evaluated: the texture as a small
-	-- greyscale picture, fitted into the strip at the bottom of the card and
-	-- centred there so it keeps the shape of the ground it covers. Nothing is
-	-- drawn for a node that has not been run, which is how a card says so.
+	-- What a picture on a card is of, in the words the card uses for it. A
+	-- density is drawn as the shades it already is, and read as chances; a field
+	-- is studs, stretched to fill the ramp, and so has to say what it was
+	-- stretched by -- which is also the only place either says which way round
+	-- the picture is.
+	local function previewTooltip(preview): string
+		local ground = " Over "
+			.. math.floor(preview.studs.X)
+			.. " by "
+			.. math.floor(preview.studs.Y)
+			.. " studs of ground, at "
+			.. math.floor(preview.cells.X)
+			.. " by "
+			.. math.floor(preview.cells.Y)
+			.. " cells."
+
+		if preview.kind == "field" then
+			return "The distance field this node measured when its graph was last run, seen from above."
+				.. "\nDark is the material itself, down to "
+				.. studLength(preview.inside)
+				.. " studs inside it at the darkest; light is the ground off it, out to "
+				.. studLength(preview.outside)
+				.. " studs clear at the lightest. The halfway tone is its edge."
+				.. "\nThe shades are stretched to whatever this field runs to, so they say where things are "
+				.. "rather than how far."
+				.. ground
+		end
+
+		return "The texture this node made when its graph was last run, seen from above."
+			.. "\nRead as a density, white keeps every candidate point standing there and black keeps none."
+			.. ground
+	end
+
+	-- What this node measured, last time it was evaluated: a small greyscale
+	-- picture, fitted into the strip at the bottom of the card and centred there
+	-- so it keeps the shape of the ground it covers. Nothing is drawn for a node
+	-- that has not been run, which is how a card says so.
 	local function addPreview(node: Instance, frame: Frame | TextButton, top: number)
 		local preview = TexturePreview.of(node)
 		if preview == nil then
@@ -2136,21 +2213,19 @@ local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 		)
 		picture.BackgroundTransparency = 1
 		picture.ImageContent = content
+
+		-- A density is left the grey it is, since grey there is a stated chance
+		-- and any colour over it would be saying something the texture does not.
+		-- A field is not a shade of anything to begin with, so it is tinted the
+		-- colour its own wires and ports are: the two kinds of picture are then
+		-- told apart at a glance, in the colour language the canvas already has.
+		if preview.kind == "field" then
+			picture.ImageColor3 = DataTypes.color(DataTypes.SDF_GRID_2D)
+		end
+
 		picture.Parent = box
 
-		overlay.watchForTooltip(
-			box,
-			"The texture this node made when its graph was last run, seen from above with the ground's own "
-				.. "shape: "
-				.. math.floor(preview.cells.X)
-				.. " by "
-				.. math.floor(preview.cells.Y)
-				.. " cells over "
-				.. math.floor(preview.studs.X)
-				.. " by "
-				.. math.floor(preview.studs.Y)
-				.. " studs.\nRead as a density, white keeps every candidate point and black keeps none."
-		)
+		overlay.watchForTooltip(box, previewTooltip(preview))
 	end
 
 	local function makeCard(node: Instance)
@@ -2288,7 +2363,7 @@ local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 			overlay.watchForTooltip(
 				port,
 				if entry.isNew
-					then "An empty slot. Drop a wire here to register another rule with this Output."
+					then entry.slot.newTooltip or "An empty slot. Drop a wire here to add an input."
 					else "The " .. DataTypes.label(entry.dataType)
 						.. " this node reads. Drop a wire from another node's right-hand port here to change it."
 						.. alsoReads

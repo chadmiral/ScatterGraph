@@ -197,6 +197,12 @@ local SCHEMA: { [string]: { Descriptor } } = {
 	-- Nothing to set: what a reroute passes on is whatever is wired into it.
 	Reroute = {},
 
+	-- Nothing to set on either merge either. What they hand on is everything
+	-- wired into them, and how many that is is said by the wires themselves
+	-- rather than by anything here.
+	MergePoints = {},
+	MergeInstances = {},
+
 	PlaceGeometryOnPoints = {
 		-- The asset placed at each point. The runtime still accepts an in-scene
 		-- template through a child ObjectValue named Asset, but that path is not

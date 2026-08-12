@@ -17,6 +17,8 @@ local NoiseTexture2DNode = require(script.Parent.Nodes:WaitForChild("NoiseTextur
 local NumberNode = require(script.Parent.Nodes:WaitForChild("NumberNode"))
 local RerouteNode = require(script.Parent.Nodes:WaitForChild("RerouteNode"))
 local ParentInstancesToNode = require(script.Parent.Nodes:WaitForChild("ParentInstancesToNode"))
+local MergePointsNode = require(script.Parent.Nodes:WaitForChild("MergePointsNode"))
+local MergeInstancesNode = require(script.Parent.Nodes:WaitForChild("MergeInstancesNode"))
 local GridLayout2D = require(script.Parent:WaitForChild("GridLayout2D"))
 local DataTypes = require(script.Parent:WaitForChild("DataTypes"))
 local TexturePreview = require(script.Parent:WaitForChild("TexturePreview"))
@@ -124,6 +126,8 @@ local nodeRegistry = {
 	Number = NumberNode,
 	Reroute = RerouteNode,
 	ParentInstancesTo = ParentInstancesToNode,
+	MergePoints = MergePointsNode,
+	MergeInstances = MergeInstancesNode,
 }
 
 local evaluateNode
@@ -209,12 +213,15 @@ evaluateNode = function(n, volumes, terrain, debugString, rule)
 			ruleName = ruleName,
 		})
 
-		-- A picture of the texture this node made, for the Graph view to draw on
-		-- its card. Only a node that makes one by declaration is worth a picture:
-		-- a reroute carrying a texture returns the same thing, and is drawn as a
-		-- dot with nowhere to put one.
-		if DataTypes.producedByType(nodeType) == DataTypes.TEXTURE_2D then
-			TexturePreview.record(n, produced)
+		-- A picture of what this node measured over the ground, for the Graph view
+		-- to draw on its card. Only a node that makes one by declaration is worth
+		-- a picture: a reroute carrying a texture returns the same thing, and is
+		-- drawn as a dot with nowhere to put one.
+		local declared = DataTypes.producedByType(nodeType)
+		if declared == DataTypes.TEXTURE_2D then
+			TexturePreview.recordTexture(n, produced)
+		elseif declared == DataTypes.SDF_GRID_2D then
+			TexturePreview.recordField(n, produced)
 		end
 
 		return produced
