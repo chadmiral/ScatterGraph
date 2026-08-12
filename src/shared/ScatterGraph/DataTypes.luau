@@ -305,6 +305,15 @@ function DataTypes.producedBy(node: Instance): DataType?
 	return producedWith(node, {})
 end
 
+-- What a node type makes, by declaration, before anything is wired to anything.
+-- Nil for a type that has no answer of its own: a Reroute, which produces
+-- whatever reaches it, or a type this module has never heard of. Asked by the
+-- evaluation, which has a NodeType in hand rather than a node, and which wants
+-- what the node itself makes rather than what it is passing on.
+function DataTypes.producedByType(nodeType: string?): DataType?
+	return if nodeType ~= nil then PRODUCES[nodeType] else nil
+end
+
 -- The slots down the left of this node, in order. Empty for a node that reads
 -- nothing, and for one this module has never heard of.
 function DataTypes.inputsOf(node: Instance): { Slot }

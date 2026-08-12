@@ -331,6 +331,8 @@ Since a field reads negative on the material it measures:
 
 **Output:** a [Texture 2D](#data-types) on the field's own cells, so nothing is resampled and the edge lands exactly where the field puts it. Reading between cells then leaves that edge soft by about a cell, which dithers the boundary instead of drawing a line across the scatter — of 5,506 candidates over the Elwynn biome, a few hundred fall in that band.
 
+Once the graph has been run, the node's card in the Graph View shows [the texture it made](#seeing-a-texture).
+
 A field naming a material the place does not have reads as astronomically far away everywhere, so cutting it gives an all-white texture that thins nothing, rather than a black one that removes everything.
 
 ---
@@ -355,6 +357,8 @@ Source node. Fills a [density texture](#density-masking) with Perlin noise: soft
 - **It is a function of position, not a picture.** The same ground gives the same blotches every run, so moving a volume moves the scatter through the pattern rather than reshuffling it, and two rules reading one node thin out together.
 - **Mid grey on average.** Over the Elwynn biome the mean is 0.503 and about half of any scatter survives it. Roughly a tenth of the ground is dark enough to be nearly bare and a tenth pale enough to be nearly untouched.
 - **It clips at the ends.** Roblox's noise mostly keeps within half a unit of zero but overshoots on a few cells in a hundred, and those clamp to solid black or white — which is what puts the occasional bare clearing and solid thicket in an otherwise probabilistic texture.
+
+Once the graph has been run, the node's card in the Graph View shows [the texture it made](#seeing-a-texture), which is the quickest way to settle a **`Scale`**.
 
 ---
 
@@ -554,6 +558,14 @@ Each texture is built once per evaluation however many rules read it.
 
 **Making one:** [`SDFThreshold2D`](#sdfthreshold2d) cuts a [distance field](#materialsdf2d) into black and white — keep off the water, hold a clearing around the road. [`NoiseTexture2D`](#noisetexture2d) fills one with soft blotches to break a scatter up. Wiring both, on two nodes of one chain, gives patchy ground cover that also respects the roads.
 
+### Seeing a texture
+
+A node that makes a texture draws it on its own card in the Graph View, as a small greyscale thumbnail along the bottom: the ground seen from above, in the shape the volumes actually cover, with white where the texture keeps everything and black where it keeps nothing.
+
+**It appears only once the node has been evaluated**, since until then there is no texture to draw — a graph opened without being run shows plain cards. Running it fills them in. Each run first blanks the cards of the graph it is about to run, so a picture is always of the last run that could have made it, and a node cut out of its graph goes back to showing nothing rather than keeping a picture of when it still mattered. [Evaluate Graph](#persisting-hand-edits) blanks only its own graph's cards, as it leaves everything else about the other graphs alone.
+
+The thumbnail is averaged down rather than sampled, so fine noise reads as the grey it averages to instead of turning into a coarser, harsher pattern that is not what the scatter is measured against. Hovering it gives the texture's size in cells and in studs.
+
 **A flat one:** a [`Number`](#number) wired straight into a **`Density`** port is [read as a texture](#conversions) of that one shade, which thins a rule by a fixed fraction everywhere — `0.3` keeps about a third of its candidates, wherever they stand. It is the simplest way to make one rule sparser without touching its spacing, and one `Number` wired into several rules thins them all together.
 
 ---
@@ -715,6 +727,7 @@ lists. Deleting it just returns the node to the automatic column layout.
 | `src/shared/ScatterGraph/GridLayout2D.luau` | Where the flat [grid](#the-grid) every field and texture of one evaluation shares sits over the ground, and how a value is read back out of one at a world position |
 | `src/shared/ScatterGraph/SDFGrid2D.luau` | A shape on the ground measured onto that grid as the distance to it, from cells already marked off as `MaterialSDF2D` marks them |
 | `src/shared/ScatterGraph/Texture2D.luau` | A greyscale image on that grid, filled cell by cell or from a function of position, and read as a [density](#density-masking) |
+| `src/shared/ScatterGraph/TexturePreview.luau` | The thumbnail of each texture a run made, shrunk once and kept against the node that made it, for the Graph view to draw on its card |
 | `src/shared/ScatterGraph/RulesWindow.luau` | "Spreadsheet View" dock widget: lists the place's graphs and the chosen graph's outputs, edits the attributes and Asset wire of the nodes feeding each one, and adds or deletes both graphs and rules |
 | `src/shared/ScatterGraph/GraphView.luau` | "Graph View" dock widget: one graph as a canvas of wired nodes that can be added, moved, rewired and deleted, beside the parameters of the selected node |
 | `src/shared/ScatterGraph/Graphs.luau` | Which graphs the place holds, and which one the Studio selection names for the Graph View button to open |

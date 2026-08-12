@@ -18,6 +18,8 @@ local NumberNode = require(script.Parent.Nodes:WaitForChild("NumberNode"))
 local RerouteNode = require(script.Parent.Nodes:WaitForChild("RerouteNode"))
 local ParentInstancesToNode = require(script.Parent.Nodes:WaitForChild("ParentInstancesToNode"))
 local GridLayout2D = require(script.Parent:WaitForChild("GridLayout2D"))
+local DataTypes = require(script.Parent:WaitForChild("DataTypes"))
+local TexturePreview = require(script.Parent:WaitForChild("TexturePreview"))
 local Helpers = require(script.Parent:WaitForChild("ScatterGraphHelpers"))
 local OccupancyStore = require(script.Parent:WaitForChild("OccupancyStore"))
 local PlacementLedger = require(script.Parent:WaitForChild("PlacementLedger"))
@@ -187,7 +189,7 @@ evaluateNode = function(n, volumes, terrain, debugString, rule)
 	local nodeType = n:GetAttribute("NodeType")
 	local impl = nodeRegistry[nodeType]
 	if impl then
-		return impl:evaluate(volumes, terrain, {
+		local produced = impl:evaluate(volumes, terrain, {
 			node = n,
 			evaluateNode = evaluateNode,
 			debugString = debugString,
@@ -206,6 +208,16 @@ evaluateNode = function(n, volumes, terrain, debugString, rule)
 			ruleKey = ruleKey,
 			ruleName = ruleName,
 		})
+
+		-- A picture of the texture this node made, for the Graph view to draw on
+		-- its card. Only a node that makes one by declaration is worth a picture:
+		-- a reroute carrying a texture returns the same thing, and is drawn as a
+		-- dot with nowhere to put one.
+		if DataTypes.producedByType(nodeType) == DataTypes.TEXTURE_2D then
+			TexturePreview.record(n, produced)
+		end
+
+		return produced
 	else
 		warn("Invalid node encountered: "..n.Name)
 	end
@@ -313,6 +325,9 @@ local function onPluginButtonClicked()
 	currentRun = PlacementLedger.beginRun()
 	currentRun:sweep()
 	currentExclusionZones = Helpers.exclusionZones()
+	-- Every texture node's card goes blank until this run reaches it again, so a
+	-- picture on a card is always of the last run that could have made it.
+	TexturePreview.clear()
 
 	for _, group in collectVolumeGroups() do
 		local scatterGraph = group.graph
@@ -381,6 +396,10 @@ local function evaluateOneGraph(graph: Instance)
 	currentRun = PlacementLedger.beginRun(graphKey)
 	currentRun:sweep()
 	currentExclusionZones = Helpers.exclusionZones()
+	-- This graph's texture cards go blank until this run reaches them again.
+	-- Only this graph's: another graph's picture is of a run that did happen,
+	-- and this one has not touched anything of theirs.
+	TexturePreview.clear(graph)
 
 	evaluateGraph(graph, VolumeGroup.new(volumes), terrain, graphKey)
 

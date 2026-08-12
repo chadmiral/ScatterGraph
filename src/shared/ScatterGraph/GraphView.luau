@@ -71,6 +71,7 @@ local Graphs = require(script.Parent:WaitForChild("Graphs"))
 local NodeInspector = require(script.Parent:WaitForChild("NodeInspector"))
 local RuleTemplates = require(script.Parent:WaitForChild("RuleTemplates"))
 local AttributeSchema = require(script.Parent:WaitForChild("AttributeSchema"))
+local TexturePreview = require(script.Parent:WaitForChild("TexturePreview"))
 
 local GraphView = {}
 
@@ -117,6 +118,12 @@ local BREAK_SIZE = 10
 -- bent wire. Twice a port, because unlike a port it is also the handle the thing
 -- is dragged by, and a round number of grid snaps so it lands on the grid square.
 local REROUTE_SIZE = 20
+-- The strip along the bottom of a texture node's card that its last evaluated
+-- texture is drawn in. Tall enough to read a pattern off and no taller: a card
+-- is a node, not a picture, and every card in a column grows by this much the
+-- moment the graph is run. The picture is fitted inside it and centred, so the
+-- ground keeps its shape rather than being stretched to a fixed rectangle.
+local PREVIEW_HEIGHT = 88
 local COLUMN_GAP = 72
 local ROW_GAP = 24
 local MARGIN = 40
@@ -546,6 +553,13 @@ local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 	local positions: { [Instance]: Vector2 } = {}
 	local inputs: { [Instance]: any } = {}
 	local cards: { [Instance]: any } = {}
+	-- The image behind each texture node's thumbnail, by the node it is drawn on.
+	-- An EditableImage is a handle with a cost of its own rather than a table, so
+	-- one is made when the picture on a card changes and destroyed the moment
+	-- that card or that picture is not current -- and, in between, survives the
+	-- rebuilds that redraw everything else.
+	local previewImages: { [Instance]: any } = {}
+	local previewsFailed = false
 	local wires = {}
 	local graphConnections: { RBXScriptConnection } = {}
 	local ribbonButtons = {}
@@ -764,6 +778,18 @@ local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 		return if isReroute(node) then REROUTE_SIZE else NODE_WIDTH
 	end
 
+	-- How much taller a card is for having a picture on it, which is none at all
+	-- until the node has been evaluated and there is one to draw -- or ever, in a
+	-- Studio that cannot make the image to draw it with, where a card should be
+	-- its old self rather than one with an empty strip along the bottom.
+	local function previewHeight(node: Instance): number
+		if previewsFailed or TexturePreview.of(node) == nil then
+			return 0
+		end
+
+		return PREVIEW_HEIGHT + PADDING
+	end
+
 	local function nodeHeight(node: Instance): number
 		if isNote(node) then
 			return NOTE_HEIGHT
@@ -774,7 +800,9 @@ local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 		end
 
 		local ports = inputs[node]
-		return headerHeight(node) + (if ports ~= nil then #ports else 0) * PORT_ROW
+		return headerHeight(node)
+			+ (if ports ~= nil then #ports else 0) * PORT_ROW
+			+ previewHeight(node)
 	end
 
 	-- Both ends of a reroute are the dot itself: the wire arriving and the wire
@@ -966,6 +994,12 @@ local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 			end
 		end)
 	end
+
+	-- A run makes the textures the cards draw, and there is no other sign of one
+	-- having happened: nothing in the graph changes when it is evaluated. The
+	-- pictures arrive one node at a time, and this coalesces them into the one
+	-- redraw a rebuild already is.
+	TexturePreview.onChanged(scheduleRebuild)
 
 	-- What the canvas can currently show, in graph pixels.
 	local function visibleBounds(): (Vector2, Vector2)
@@ -2017,6 +2051,108 @@ local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 		)
 	end
 
+	-- The image a thumbnail is drawn from, made once per picture and kept until
+	-- the node makes a different one. Nil where this Studio cannot make an
+	-- editable image at all, which costs the cards their pictures and nothing
+	-- else -- said once rather than once a card, since it will not start working
+	-- partway through a session.
+	local function previewContent(node: Instance, preview): Content?
+		local held = previewImages[node]
+
+		if held ~= nil then
+			if held.preview == preview then
+				return held.content
+			end
+
+			held.image:Destroy()
+			previewImages[node] = nil
+		end
+
+		if previewsFailed then
+			return nil
+		end
+
+		local ok, err = pcall(function()
+			local image = AssetService:CreateEditableImage({ Size = Vector2.new(preview.width, preview.height) })
+			image:WritePixelsBuffer(Vector2.zero, image.Size, preview.pixels)
+
+			-- The image is held alongside the Content, which is a handle to it
+			-- rather than a copy of it.
+			previewImages[node] = { preview = preview, image = image, content = Content.fromObject(image) }
+		end)
+
+		if not ok then
+			previewsFailed = true
+			warn("ScatterGraph: no texture previews -- " .. tostring(err))
+			return nil
+		end
+
+		return previewImages[node].content
+	end
+
+	-- Let go of the images of every node not in `keep`, which is what a rebuild
+	-- leaves behind when a node is deleted or a picture forgotten.
+	local function releasePreviewImages(keep: { [Instance]: any })
+		for node, held in previewImages do
+			if keep[node] == nil then
+				held.image:Destroy()
+				previewImages[node] = nil
+			end
+		end
+	end
+
+	-- What this node made, last time it was evaluated: the texture as a small
+	-- greyscale picture, fitted into the strip at the bottom of the card and
+	-- centred there so it keeps the shape of the ground it covers. Nothing is
+	-- drawn for a node that has not been run, which is how a card says so.
+	local function addPreview(node: Instance, frame: Frame | TextButton, top: number)
+		local preview = TexturePreview.of(node)
+		if preview == nil then
+			return
+		end
+
+		local content = previewContent(node, preview)
+		if content == nil then
+			return
+		end
+
+		local box = Instance.new("Frame")
+		box.Position = UDim2.fromOffset(PADDING, top)
+		box.Size = UDim2.fromOffset(NODE_WIDTH - PADDING * 2, PREVIEW_HEIGHT)
+		box.BackgroundColor3 = color(Enum.StudioStyleGuideColor.InputFieldBackground)
+		box.BorderSizePixel = 0
+		box.Parent = frame
+
+		-- As large as it goes without leaving the strip or being stretched. The
+		-- picture is already the shape of the ground, so one scale does both.
+		local fit = math.min(box.Size.X.Offset / preview.width, PREVIEW_HEIGHT / preview.height)
+
+		local picture = Instance.new("ImageLabel")
+		picture.AnchorPoint = Vector2.new(0.5, 0.5)
+		picture.Position = UDim2.fromScale(0.5, 0.5)
+		picture.Size = UDim2.fromOffset(
+			math.max(1, math.floor(preview.width * fit)),
+			math.max(1, math.floor(preview.height * fit))
+		)
+		picture.BackgroundTransparency = 1
+		picture.ImageContent = content
+		picture.Parent = box
+
+		overlay.watchForTooltip(
+			box,
+			"The texture this node made when its graph was last run, seen from above with the ground's own "
+				.. "shape: "
+				.. math.floor(preview.cells.X)
+				.. " by "
+				.. math.floor(preview.cells.Y)
+				.. " cells over "
+				.. math.floor(preview.studs.X)
+				.. " by "
+				.. math.floor(preview.studs.Y)
+				.. " studs.\nRead as a density, white keeps every candidate point and black keeps none."
+		)
+	end
+
 	local function makeCard(node: Instance)
 		if isNote(node) then
 			makeNoteCard(node)
@@ -2158,6 +2294,8 @@ local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 						.. alsoReads
 			)
 		end
+
+		addPreview(node, frame, headerHeight(node) + #ports * PORT_ROW + PADDING)
 
 		-- The title strip and the labels are drawn over the card but take no
 		-- input of their own, so a press anywhere on it arrives here; the ports
@@ -2310,6 +2448,7 @@ local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 			widget.Title = "ScatterGraph Graph View"
 			table.clear(selection)
 			inputs = {}
+			releasePreviewImages(cards)
 			-- Nothing to show either because the place holds no graph at all, or
 			-- because the one being shown has since gone.
 			showMessage(if graph == nil
@@ -2342,6 +2481,10 @@ local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 		for _, node in nodes do
 			makeCard(node)
 		end
+
+		-- Whatever was not drawn this time is not on the canvas: a node deleted,
+		-- or one whose picture a run has since cleared.
+		releasePreviewImages(cards)
 
 		for _, target in nodes do
 			for index, port in inputs[target] do
