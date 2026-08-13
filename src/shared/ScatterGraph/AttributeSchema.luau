@@ -83,6 +83,37 @@ local function rangeEnds(kind: string, default: any, what: string): { Descriptor
 	return ends
 end
 
+-- How finely a node that reads the ground reads it. Written once because the four
+-- terrain textures all take it and it means the same on each of them: unlike the
+-- noise texture, whose cell size only matters against its own Scale, this is how
+-- many rays are cast and so what the picture actually costs.
+local function terrainCell(what: string): Descriptor
+	return {
+		name = "VoxelSize",
+		label = "Voxel Size",
+		kind = "number",
+		optional = true,
+		default = 4,
+		description = "The edge of one cell of the texture, in studs: one reading of the ground per cell, so "
+			.. "halving it is four times the work. Four is terrain's own grid. " .. what,
+	}
+end
+
+-- How far apart a node that reads the lie of the ground compares it. Three of the
+-- four take this; a heightmap is one cell on its own and has nothing to compare.
+local function terrainKernel(what: string): Descriptor
+	return {
+		name = "Kernel",
+		kind = "number",
+		optional = true,
+		integer = true,
+		default = 1,
+		description = "How many cells to each side the ground is compared across, so the distance is this "
+			.. "many times Voxel Size. One is the neighbouring cells and reads every bump; larger reads the "
+			.. "shape of the hill a bump sits on and passes over the bump itself. " .. what,
+	}
+end
+
 local SCHEMA: { [string]: { Descriptor } } = {
 	ScatterPoints = {
 		{
@@ -257,6 +288,51 @@ local SCHEMA: { [string]: { Descriptor } } = {
 
 	-- Both of its parameters arrive over wires, so it has none of its own.
 	SDFThreshold2D = {},
+
+	-- Nor have the four texture operations: both sides of the arithmetic are ports,
+	-- and a figure to add or scale by is a Number wired to one of them rather than
+	-- a value typed here, so that several nodes can share the one figure.
+	TextureAdd = {},
+	TextureSubtract = {},
+	TextureMultiply = {},
+	TextureDivide = {},
+
+	TerrainHeight = {
+		terrainCell("A heightmap is smooth, so a coarse cell costs little and reads much the same."),
+	},
+
+	TerrainSlope = {
+		terrainKernel("A rule keeping off cliffs wants a small kernel; one keeping to the valley floor a "
+			.. "large one."),
+		terrainCell("Steepness is measured across cells, so this and Kernel together decide over how many "
+			.. "studs."),
+	},
+
+	TerrainAspect = {
+		terrainKernel("Small kernels make a noisy picture on rough ground, since a bearing swings wildly "
+			.. "where the ground is nearly flat."),
+		terrainCell("A bearing is measured across cells, so this and Kernel together decide over how many "
+			.. "studs."),
+	},
+
+	TerrainCurvature = {
+		terrainKernel("This changes what the picture is of more than it does on a slope: a cell either way "
+			.. "finds every stone, ten cells finds the hill they lie on."),
+		{
+			name = "Normalize",
+			kind = "boolean",
+			optional = true,
+			default = true,
+			description = "Curvature runs either side of zero and a texture runs 0 to 1. On, no bend is mid "
+				.. "grey and the greys spread either side of it: convex ground lighter, concave darker. "
+				.. "The sharpest hundredth of the ground saturates, so that a single quarry lip does not "
+				.. "set the scale and leave the rest of the biome grey. Off gives the curvature itself in "
+				.. "reciprocal studs, which means every concave cell reads 0 and the rest is nearly black "
+				.. "-- only useful for reading a number back out of a cell.",
+		},
+		terrainCell("A bend is measured across cells, so this and Kernel together decide over how many "
+			.. "studs."),
+	},
 
 	-- Nothing to set: what a reroute passes on is whatever is wired into it.
 	Reroute = {},

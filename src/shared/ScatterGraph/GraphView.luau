@@ -165,7 +165,11 @@ local ZOOM_WHEEL_STEP = 1.075
 -- being done to is what the ports are coloured for. The three that settle part of
 -- every point in a cloud share a colour with each other for the same reason, and
 -- the two that hold nothing but a value they hand on share the violet the Number
--- has always had. These are fixed rather than theme
+-- has always had. The four that read the ground -- height, slope, aspect,
+-- curvature -- take the same rust as the other two texture makers, and so do the
+-- four that do arithmetic on two textures: what all ten hand on is a texture that
+-- thins a scatter out, and where its shades came from is what the title says
+-- rather than what the colour does. These are fixed rather than theme
 -- colours because they say which node type this is, not which part of the window
 -- it is. A reroute is not here: it has no title to colour, being drawn as a dot in
 -- the colour of whatever it is carrying.
@@ -176,6 +180,14 @@ local TITLE_COLORS = {
 	MaterialSDF2D = Color3.fromRGB(124, 110, 46),
 	SDFThreshold2D = Color3.fromRGB(140, 84, 62),
 	NoiseTexture2D = Color3.fromRGB(140, 84, 62),
+	TerrainHeight = Color3.fromRGB(140, 84, 62),
+	TerrainSlope = Color3.fromRGB(140, 84, 62),
+	TerrainAspect = Color3.fromRGB(140, 84, 62),
+	TerrainCurvature = Color3.fromRGB(140, 84, 62),
+	TextureAdd = Color3.fromRGB(140, 84, 62),
+	TextureSubtract = Color3.fromRGB(140, 84, 62),
+	TextureMultiply = Color3.fromRGB(140, 84, 62),
+	TextureDivide = Color3.fromRGB(140, 84, 62),
 	Number = Color3.fromRGB(104, 78, 148),
 	Vector3 = Color3.fromRGB(104, 78, 148),
 	Rotation = Color3.fromRGB(104, 78, 148),
@@ -247,12 +259,15 @@ local POSITION_ATTRIBUTE = "GraphPosition"
 
 -- The single nodes the add menu offers, below the whole rules from RuleTemplates.
 -- These values are a starting point for a node built by hand; a template tunes
--- the same attributes further for the chain each one belongs to.
+-- the same attributes further for the chain each one belongs to. Each says which
+-- group of the menu it is offered in -- see MENU_GROUPS -- and one that says no
+-- group is offered at the top of the menu rather than inside anything.
 local NODE_TEMPLATES = {
 	{
 		label = "Scatter Points",
 		name = "ScatterPoints",
 		nodeType = "ScatterPoints",
+		group = "Points",
 		attributes = { Seed = 1, Spacing = 40 },
 	},
 	{
@@ -263,12 +278,14 @@ local NODE_TEMPLATES = {
 		label = "Cluster",
 		name = "Cluster",
 		nodeType = "ScatterPointsAroundPoints",
+		group = "Points",
 		attributes = { Seed = 2, InnerRadius = 0, OuterRadius = 8, Count = 10 },
 	},
 	{
 		label = "Snap To Terrain",
 		name = "SnapPointsToTerrain",
 		nodeType = "SnapPointsToTerrain",
+		group = "Points",
 		attributes = { MaterialFilter = "Water", SlopeFilter = NumberSequence.new(1, 0) },
 	},
 	{
@@ -277,6 +294,7 @@ local NODE_TEMPLATES = {
 		label = "Merge Points",
 		name = "MergePoints",
 		nodeType = "MergePoints",
+		group = "Points",
 		attributes = {},
 	},
 	{
@@ -288,48 +306,119 @@ local NODE_TEMPLATES = {
 		label = "Set Rotation Range",
 		name = "SetRotationRange",
 		nodeType = "SetRotationRange",
+		group = "Transforms",
 		attributes = { A = Vector3.zero, B = Vector3.new(0, 360, 0) },
 	},
 	{
 		label = "Set Scale Range",
 		name = "SetScaleRange",
 		nodeType = "SetScaleRange",
+		group = "Transforms",
 		attributes = { A = 0.9, B = 1.1 },
 	},
 	{
 		label = "Set Translation Offset Range",
 		name = "SetTranslationOffsetRange",
 		nodeType = "SetTranslationOffsetRange",
+		group = "Transforms",
 		attributes = { A = Vector3.zero, B = Vector3.zero },
 	},
 	{
 		label = "Material SDF 2D",
 		name = "MaterialSDF2D",
 		nodeType = "MaterialSDF2D",
+		group = "Textures",
 		attributes = { Materials = "Water", VoxelSize = 4 },
 	},
 	{
 		label = "SDF Threshold",
 		name = "SDFThreshold2D",
 		nodeType = "SDFThreshold2D",
+		group = "Textures",
 		attributes = {},
 	},
 	{
 		label = "Noise Texture 2D",
 		name = "NoiseTexture2D",
 		nodeType = "NoiseTexture2D",
+		group = "Textures",
 		attributes = { Scale = 64, Phase = 0, VoxelSize = 4 },
+	},
+	{
+		-- The four that read the ground under the volumes. Nothing is wired into
+		-- one, and each starts at the finest reading the grid gives: a kernel of one
+		-- cell over terrain's own four studs. Coarsen them where a rule wants the
+		-- shape of the hill rather than the stones on it.
+		label = "Terrain Height",
+		name = "TerrainHeight",
+		nodeType = "TerrainHeight",
+		group = "Terrain",
+		attributes = { VoxelSize = 4 },
+	},
+	{
+		label = "Terrain Slope",
+		name = "TerrainSlope",
+		nodeType = "TerrainSlope",
+		group = "Terrain",
+		attributes = { Kernel = 1, VoxelSize = 4 },
+	},
+	{
+		label = "Terrain Aspect",
+		name = "TerrainAspect",
+		nodeType = "TerrainAspect",
+		group = "Terrain",
+		attributes = { Kernel = 1, VoxelSize = 4 },
+	},
+	{
+		label = "Terrain Curvature",
+		name = "TerrainCurvature",
+		nodeType = "TerrainCurvature",
+		group = "Terrain",
+		attributes = { Kernel = 1, Normalize = true, VoxelSize = 4 },
+	},
+	{
+		-- The four that do arithmetic on two textures, cell by cell. Nothing to set
+		-- on any of them: both sides are ports, since a figure to add or scale by is
+		-- a Number wired in rather than a value typed here.
+		label = "Add",
+		name = "TextureAdd",
+		nodeType = "TextureAdd",
+		group = "Texture Operations",
+		attributes = {},
+	},
+	{
+		label = "Subtract",
+		name = "TextureSubtract",
+		nodeType = "TextureSubtract",
+		group = "Texture Operations",
+		attributes = {},
+	},
+	{
+		label = "Multiply",
+		name = "TextureMultiply",
+		nodeType = "TextureMultiply",
+		group = "Texture Operations",
+		attributes = {},
+	},
+	{
+		label = "Divide",
+		name = "TextureDivide",
+		nodeType = "TextureDivide",
+		group = "Texture Operations",
+		attributes = {},
 	},
 	{
 		label = "Number",
 		name = "Number",
 		nodeType = "Number",
+		group = "Values",
 		attributes = { Value = 0 },
 	},
 	{
 		label = "3D Vector",
 		name = "Vector3",
 		nodeType = "Vector3",
+		group = "Values",
 		attributes = { Value = Vector3.zero },
 	},
 	{
@@ -338,6 +427,7 @@ local NODE_TEMPLATES = {
 		label = "Rotation",
 		name = "Rotation",
 		nodeType = "Rotation",
+		group = "Values",
 		attributes = { Angles = Vector3.zero },
 	},
 	{
@@ -348,6 +438,7 @@ local NODE_TEMPLATES = {
 		label = "Place Asset",
 		name = "PlaceAssetOnPoints",
 		nodeType = "PlaceGeometryOnPoints",
+		group = "Placement",
 		attributes = {},
 	},
 	{
@@ -358,6 +449,7 @@ local NODE_TEMPLATES = {
 		label = "Parent Instances To",
 		name = "ParentInstancesTo",
 		nodeType = "ParentInstancesTo",
+		group = "Placement",
 		attributes = {},
 	},
 	{
@@ -366,6 +458,7 @@ local NODE_TEMPLATES = {
 		label = "Merge Instances",
 		name = "MergeInstances",
 		nodeType = "MergeInstances",
+		group = "Placement",
 		attributes = {},
 	},
 	{
@@ -385,6 +478,33 @@ local NODE_TEMPLATES = {
 		nodeType = "Note",
 		attributes = { Text = "" },
 	},
+}
+
+--[[
+	The groups the add menu offers, in the order it offers them, which is roughly
+	the order a chain is built in: the points first, then what varies them, then the
+	ground they are measured against, then the textures that thin them and the
+	arithmetic on those, then the values all of it reads, then what puts geometry
+	down at the end.
+
+	There are more than twenty single nodes now, and a flat list of them is a wall
+	to read and a long way to travel. A group is a submenu rather than a heading
+	because a heading would leave the list exactly as long as it was.
+
+	A node belonging to no group -- the reroute and the note, which are for the
+	canvas rather than for a chain -- is offered at the top level under a line,
+	being reached often and worth the shorter trip. A node named for a group that is
+	not in this list is offered after all of these rather than lost: a group is a
+	string on a template, and a typo should be visible instead of hiding the node.
+]]
+local MENU_GROUPS = {
+	"Points",
+	"Transforms",
+	"Terrain",
+	"Textures",
+	"Texture Operations",
+	"Values",
+	"Placement",
 }
 
 -- Wires carry a NodeType attribute of their own, so being one is not enough.
@@ -2812,9 +2932,10 @@ local function create(pluginRef: Plugin, actions: Actions)
 
 	-- What the window can add, as menu items that put it at a given place: the
 	-- whole rules first under their own icons, then a line, then the single nodes
-	-- to build a chain out of by hand. Shared by the ribbon's Add Node button and
-	-- the right-click menu, which differ in where that place comes from and in
-	-- whether anything else on screen already says what the menu is for.
+	-- to build a chain out of by hand, in the groups MENU_GROUPS names. Shared by
+	-- the ribbon's Add Node button and the right-click menu, which differ in where
+	-- that place comes from and in whether anything else on screen already says
+	-- what the menu is for.
 	local function addMenuItems(at: Vector2, heading: string?)
 		local items = {}
 
@@ -2834,13 +2955,63 @@ local function create(pluginRef: Plugin, actions: Actions)
 
 		table.insert(items, { kind = "divider" })
 
+		-- Gathered into their groups in the order the templates are declared, which
+		-- is the order each group's own submenu then offers them in.
+		local grouped = {}
+		local ungrouped = {}
+
 		for _, template in NODE_TEMPLATES do
-			table.insert(items, {
+			local entry = {
 				text = template.label,
 				activate = function()
 					addNode(template, at)
 				end,
-			})
+			}
+
+			if template.group == nil then
+				table.insert(ungrouped, entry)
+			else
+				local group = grouped[template.group]
+
+				if group == nil then
+					group = {}
+					grouped[template.group] = group
+				end
+
+				table.insert(group, entry)
+			end
+		end
+
+		local function offerGroup(name: string)
+			local inside = grouped[name]
+
+			if inside ~= nil then
+				table.insert(items, { kind = "submenu", text = name, items = inside })
+				grouped[name] = nil
+			end
+		end
+
+		for _, name in MENU_GROUPS do
+			offerGroup(name)
+		end
+
+		-- Anything named for a group this window does not know the place of, after
+		-- the ones it does. Sorted, since a table's own order is not one.
+		local unknown = {}
+		for name in grouped do
+			table.insert(unknown, name)
+		end
+		table.sort(unknown)
+		for _, name in unknown do
+			offerGroup(name)
+		end
+
+		if #ungrouped > 0 then
+			table.insert(items, { kind = "divider" })
+
+			for _, entry in ungrouped do
+				table.insert(items, entry)
+			end
 		end
 
 		return items

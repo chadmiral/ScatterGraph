@@ -478,23 +478,24 @@ function M.wireNamed(node: Instance, name: string): ObjectValue?
 end
 
 --[[
-	The density texture wired to a node's Density slot, or nothing where that slot
-	is empty -- which is not a mistake, since most nodes scatter evenly and have no
-	texture at all. A slot wired to something that produces neither a texture nor a
-	number is a mistake, and is said once per evaluation.
+	The texture wired to a named slot of a node, or nothing where that slot is
+	empty. `instead` finishes the sentence a wire pointing at something that is not
+	a texture earns -- what happened for want of one -- since that reads
+	differently on a node that thins a scatter and on one that does arithmetic.
 
-	Read here rather than in each node, since all three scattering nodes take the
-	same slot and would otherwise say so three times.
+	Read here rather than in each node, since the three scattering nodes and the
+	four texture operations all take a slot the same way and would otherwise say
+	how a Number becomes a texture in seven places.
 ]]
-function M.readDensity(node: Instance, volumes, terrain, ctx): Texture2D.Texture?
-	local wire = M.wireNamed(node, DENSITY_WIRE)
+function M.readTexture(node: Instance, slot: string, volumes, terrain, ctx, instead: string): Texture2D.Texture?
+	local wire = M.wireNamed(node, slot)
 	if wire == nil or wire.Value == nil then
 		return nil
 	end
 
 	local produced = ctx.evaluateNode(wire.Value, volumes, terrain, ctx.debugString)
 
-	-- A number read as the texture it plainly means: that chance everywhere,
+	-- A number read as the texture it plainly means: that one shade everywhere,
 	-- rather than a pattern. This is the graph view's Number-to-texture conversion
 	-- being made -- the canvas allows the wire and draws it as a sweep between the
 	-- two colours; here is where the reading actually happens.
@@ -504,13 +505,20 @@ function M.readDensity(node: Instance, volumes, terrain, ctx): Texture2D.Texture
 
 	if not Texture2D.is(produced) then
 		warn(
-			"Node " .. node.Name .. ": its Density wire points at " .. wire.Value.Name
-				.. ", which produces neither a texture nor a number, so the scatter was not thinned."
+			"Node " .. node.Name .. ": its " .. slot .. " wire points at " .. wire.Value.Name
+				.. ", which produces neither a texture nor a number, so " .. instead .. "."
 		)
 		return nil
 	end
 
 	return produced
+end
+
+-- The density texture wired to a node's Density slot, or nothing where that slot
+-- is empty -- which is not a mistake, since most nodes scatter evenly and have no
+-- texture at all.
+function M.readDensity(node: Instance, volumes, terrain, ctx): Texture2D.Texture?
+	return M.readTexture(node, DENSITY_WIRE, volumes, terrain, ctx, "the scatter was not thinned")
 end
 
 --[[

@@ -32,6 +32,14 @@ This document describes every node type, attribute, wire, tag, and volume settin
 | `MaterialSDF2D` | Measures how far every spot of ground under the volumes is from named terrain materials, seen from above |
 | `SDFThreshold2D` | Cuts a distance field at a distance, giving a density texture that is white beyond it and black within |
 | `NoiseTexture2D` | Fills a density texture with Perlin noise, to break a scatter up in soft patches |
+| `TerrainHeight` | A heightmap of the ground as a density texture, black at its lowest and white at its highest |
+| `TerrainSlope` | How steep the ground is, as a density texture: black on the flat, white on a wall |
+| `TerrainAspect` | Which way the ground faces, as a density texture: the compass bearing a slope runs down |
+| `TerrainCurvature` | How the ground bends, as a density texture: convex ground light, concave dark |
+| `TextureAdd` | Two density textures summed, cell by cell: A + B |
+| `TextureSubtract` | One density texture taken out of another: A − B |
+| `TextureMultiply` | Two density textures multiplied, cell by cell: A × B |
+| `TextureDivide` | One density texture divided by another: A ÷ B |
 | `Number` | Holds one number for other nodes to read |
 | `Reroute` | Hands on whatever is wired into it, so a wire can be routed around the canvas |
 | `MergePoints` | Reads several chains of points and hands on all of them together |
@@ -103,8 +111,8 @@ A wire between two nodes carries one of these kinds of thing, and each end of it
 | **Points** | A cloud of [points](#what-a-point-carries), each with a position, a rotation and a scale | `ScatterPoints`, `ScatterPointsAroundPoints`, `SnapPointsToTerrain`, `MergePoints`, `SetRotationRange`, `SetScaleRange`, `SetTranslationOffsetRange` | the same seven, less `ScatterPoints`, plus `PlaceGeometryOnPoints` | Blue |
 | **Instances** | The geometry a rule has placed in the world | `PlaceGeometryOnPoints`, `ParentInstancesTo`, `MergeInstances` | `ParentInstancesTo`, `MergeInstances`, `Output` | Green |
 | **SDF Grid 2D** | A shape on the ground measured onto a rectangle of cells as the signed distance to its edge, seen from above | `MaterialSDF2D` | `SDFThreshold2D` | Yellow |
-| **Texture 2D** | A greyscale image laid over the ground, read as [how much of a scatter survives where](#density-masking) | `SDFThreshold2D`, `NoiseTexture2D` | `ScatterPoints`, `ScatterPointsAroundPoints`, `SnapPointsToTerrain` | Salmon |
-| **Number** | A single value | `Number` | `SDFThreshold2D`, `SetScaleRange` | Violet |
+| **Texture 2D** | A greyscale image laid over the ground, read as [how much of a scatter survives where](#density-masking) | `SDFThreshold2D`, `NoiseTexture2D`, `TerrainHeight`, `TerrainSlope`, `TerrainAspect`, `TerrainCurvature`, `TextureAdd`, `TextureSubtract`, `TextureMultiply`, `TextureDivide` | `ScatterPoints`, `ScatterPointsAroundPoints`, `SnapPointsToTerrain`, and the same four operations, which read two apiece | Salmon |
+| **Number** | A single value | `Number` | `SDFThreshold2D`, `SetScaleRange`, and either side of a [texture operation](#texture-arithmetic), read as a flat shade | Violet |
 | **3D Vector** | Three numbers: an offset, a lift | `Vector3` | `SetTranslationOffsetRange` | Teal |
 | **Rotation** | A turn, held as a quaternion together with the angles it was authored from | `Rotation` | `SetRotationRange` | Pink |
 
@@ -240,6 +248,20 @@ Grouping is by the *definition the volume links to*, so:
 ---
 
 ## Node reference
+
+This is organised by **`NodeType`**, which is what a graph actually carries. The Graph View offers the same nodes in folders — right-click the canvas, or use the ribbon's **Add Node** — there being enough of them now that one list of them is a wall to read:
+
+| Folder | Holds |
+|--------|-------|
+| **Points** | [Scatter Points](#scatterpoints), [Cluster](#scatterpointsaroundpoints), [Snap To Terrain](#snappointstoterrain), [Merge Points](#mergepoints) |
+| **Transforms** | the three [range nodes](#the-two-ends-of-a-range) that settle a point's rotation, scale and offset |
+| **Terrain** | the four that [read the ground](#reading-the-ground) |
+| **Textures** | [Material SDF 2D](#materialsdf2d), [SDF Threshold](#sdfthreshold2d), [Noise Texture 2D](#noisetexture2d) |
+| **Texture Operations** | [Add](#textureadd), [Subtract](#texturesubtract), [Multiply](#texturemultiply), [Divide](#texturedivide) |
+| **Values** | [Number](#number), [3D Vector](#vector3), [Rotation](#rotation) |
+| **Placement** | [Place Asset](#placegeometryonpoints), [Parent Instances To](#parentinstancesto), [Merge Instances](#mergeinstances) |
+
+[Reroute](#reroute) and Note sit at the top level rather than in a folder, being for the canvas rather than for a chain, and the whole rules from the rule templates are above all of it under their own icons. **A menu label is what a node is called rather than its `NodeType`**: *Cluster* is a `ScatterPointsAroundPoints`, *Place Asset* is a `PlaceGeometryOnPoints`, and the four operations are labelled for the arithmetic alone — *Multiply* is a `TextureMultiply`.
 
 ### ScatterPoints
 
@@ -525,6 +547,233 @@ Once the graph has been run, the node's card in the Graph View shows [the textur
 
 ---
 
+### Reading the ground
+
+Four source nodes measure the terrain itself into a [density texture](#density-masking): [`TerrainHeight`](#terrainheight), [`TerrainSlope`](#terrainslope), [`TerrainAspect`](#terrainaspect) and [`TerrainCurvature`](#terraincurvature). They are how a rule says *not on the cliffs*, *only in the hollows*, *the sunny side of the ridge* — the things that decide where anything actually grows. This section is what they share; each has its own below.
+
+**None of them takes a wire.** What they measure is the ground under the volumes being scattered, which the run knows before the graph is walked, so they start a chain the way [`NoiseTexture2D`](#noisetexture2d) does.
+
+**How the ground is read.** One ray straight down per cell of [the grid](#the-grid), from the top of the volumes to the bottom of them. Rays rather than terrain voxels, for two reasons: a ray reports the surface the terrain actually renders — terrain is smoothed between its voxels, and a slope read off voxel occupancy would be the shape of the data rather than the shape of the hill — and it is the same surface [`SnapPointsToTerrain`](#snappointstoterrain) casts onto, so a slope texture and the points it masks agree about the ground. Ground with a hollow under it reads as ground, which is what looking down at it says.
+
+**Cost.** Reading the Elwynn biome's ground at the default 4 studs is 37,440 rays and about 100 ms, and everything each node does with those heights afterwards is around 15 ms. **The ground is read once per grid per run**, so all four nodes at one **`VoxelSize`**, however many rules read them, share a single pass over the terrain; a node set to a different **`VoxelSize`** pays for its own. Halving **`VoxelSize`** is four times the rays. Past a million cells the reading is coarsened, doubling the cell until it fits, with a warning saying so.
+
+**Where there is no terrain.** A cell with nothing under it is not ground, and does not read as ground at the bottom of the volumes: it reads as *nothing here* — black in a heightmap, flat in a slope, no bearing in an aspect, no bend in a curvature. It also does not act as a cliff to its neighbours, so a hole in the terrain does not ring itself with false slope. In the Elwynn biome 32,937 of 37,440 cells find ground; the rest are the padding and the gaps. If nothing at all is found, the node says so and hands back a black texture.
+
+**Comparing cells: `Kernel`.** Slope, aspect and curvature are not properties of a spot but of the ground around it, so three of the four take a **`Kernel`**: how many cells to each side the height is compared across, making the distance `Kernel × VoxelSize` studs. `1` is the neighbouring cells and reads every bump; larger reads the shape of the hill a bump sits on and passes over the bump itself. A rule keeping props off cliff faces wants a small kernel; one keeping them to the valley floor wants a large one. Values are rounded to a whole number of at least one, with a warning. **`TerrainHeight`** has no **`Kernel`**: a height is what the cell itself measured.
+
+All four draw [what they measured](#seeing-what-a-node-measured) on their cards once the graph has been run, which is by far the quickest way to settle a **`Kernel`**.
+
+---
+
+### TerrainHeight
+
+Source node. A heightmap of the ground as a [density texture](#density-masking): **black at the lowest ground under the volumes, white at the highest**. See [Reading the ground](#reading-the-ground) for how it is measured.
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **`NodeType`** | `string` | Yes | **`TerrainHeight`** |
+| **`VoxelSize`** | `number` | No | The edge of one cell, in studs, and so one reading of the ground per cell. Defaults to **`4`**. A heightmap is smooth, so a coarse cell costs little here and reads much the same. |
+
+**Inputs:** None (source node).
+
+**Output:** a [Texture 2D](#data-types) over [the ground the scatter volumes set](#the-grid).
+
+**The range is the ground's own** — the lowest and highest terrain found under the volumes, not the volumes' own height and not the world's — so the picture uses all of its greys over whatever relief is actually there. The Elwynn biome's ground runs from 59 to 283 studs, and that 224 studs is what black to white is worth; a gentler biome would spend the same greys over less. That makes this a mask for *high ground* and *low ground* in the terms of this place, which is nearly always what a rule means, and worth nothing at all for comparing two places. Ground of no relief at all has no range to normalise against and reads white — the end that does not silently delete a scatter masked against it — with a warning saying so.
+
+Wired into a **`Density`** slot it thins a scatter with altitude, which is most of what altitude does to what grows. Turned over it is a valley-floor mask, and that is a thing to build in the graph rather than a parameter here.
+
+---
+
+### TerrainSlope
+
+Source node. How steep the ground is, as a [density texture](#density-masking): **black on the flat, white on a wall**, and the greys between in proportion to the angle. See [Reading the ground](#reading-the-ground) for how it is measured.
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **`NodeType`** | `string` | Yes | **`TerrainSlope`** |
+| **`Kernel`** | `number` | No | Cells to each side the height is compared across. Defaults to **`1`**. |
+| **`VoxelSize`** | `number` | No | The edge of one cell, in studs. Defaults to **`4`**. This and **`Kernel`** together decide over how many studs steepness is measured. |
+
+**Inputs:** None (source node).
+
+**Output:** a [Texture 2D](#data-types) over [the ground the scatter volumes set](#the-grid).
+
+**The value is the angle over ninety degrees**, so a shade is a slope you can name:
+
+| The ground | Reads |
+|------------|-------|
+| Flat | `0` |
+| A 30° bank | `0.33` |
+| A 45° bank | `0.5` |
+| A 60° bank | `0.67` |
+| Vertical | `1` |
+
+That is deliberately **not** the measure [`SnapPointsToTerrain`](#snappointstoterrain)'s **`SlopeFilter`** uses, which is one minus the cosine of the same angle and so spends most of its range on the steep end — 45° reads `0.29` there. A filter curve is drawn by eye against what it does to a scatter, where that hardly matters; a texture is read as a number and wired into arithmetic, where a shade meaning half the angle rather than some cosine of it matters a great deal.
+
+Over the Elwynn biome the mean is 0.265 and about two fifths of the ground is in the lowest tenth — flat or nearly so — with a tail out to 0.92, which is the crags. Wired into a **`Density`** slot, that keeps a scatter to the steep: of 1,340 points snapped to that ground, a quarter stood on ground past 45°, and of the ones this texture kept, over half did.
+
+---
+
+### TerrainAspect
+
+Source node. Which way the ground faces, as a [density texture](#density-masking): the compass bearing a slope runs down, once round the compass over the range of the texture. See [Reading the ground](#reading-the-ground) for how it is measured.
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **`NodeType`** | `string` | Yes | **`TerrainAspect`** |
+| **`Kernel`** | `number` | No | Cells to each side the height is compared across. Defaults to **`1`**. Small kernels make a noisy picture on rough ground, since a bearing swings wildly where the ground is nearly flat. |
+| **`VoxelSize`** | `number` | No | The edge of one cell, in studs. Defaults to **`4`**. |
+
+**Inputs:** None (source node).
+
+**Output:** a [Texture 2D](#data-types) over [the ground the scatter volumes set](#the-grid).
+
+| The slope faces | Reads |
+|-----------------|-------|
+| North | `0` |
+| East | `0.25` |
+| South | `0.5` |
+| West | `0.75` |
+| North again | `1` |
+
+**Both ends of the range are north**, which is what a bearing is rather than a mistake. **North is negative Z and east is positive X** — the compass Studio's own camera starts out facing along. There is no north in a Roblox place to be right or wrong about; this is the convention, stated so that a rule can be written against it.
+
+What it is for is the difference between the two sides of a hill: a south face takes the sun, dries out, and grows different things from the north face above the same valley. Two things to know before relying on it:
+
+- **Flat ground has no direction to face, and reads `0`, the same as true north.** So does a cell with no terrain under it. Anything using this seriously wants a slope texture alongside to say where a direction means anything at all.
+- **A bearing wraps where the picture does not.** A cell facing a little east of north sits beside one facing a little west of north — `0.02` beside `0.98` — and [reading between cells](#the-grid) passes through south on the way. It is a seam one cell wide along every north-facing slope, and it is in the nature of flattening a circle onto a number.
+
+---
+
+### TerrainCurvature
+
+Source node. How the ground bends, as a [density texture](#density-masking): the rate the slope itself changes, which is the second derivative of height and tells convex ground from concave. **Ridges, hilltops and the lips of banks come out light; gullies, hollows and the feet of slopes come out dark.** Flat ground and an even hillside, however steep, both come out as no bend at all — an even slope does not bend. See [Reading the ground](#reading-the-ground) for how it is measured.
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **`NodeType`** | `string` | Yes | **`TerrainCurvature`** |
+| **`Kernel`** | `number` | No | Cells to each side the height is compared across. Defaults to **`1`**. This changes what the picture is *of* more than it does on a slope: a cell either way finds every stone, ten cells finds the hill the stones lie on. |
+| **`Normalize`** | `boolean` | No | Whether to spread the greys over the bends found, rather than handing back the curvature itself. Defaults to **`true`**; see below. |
+| **`VoxelSize`** | `number` | No | The edge of one cell, in studs. Defaults to **`4`**. |
+
+**Inputs:** None (source node).
+
+**Output:** a [Texture 2D](#data-types) over [the ground the scatter volumes set](#the-grid).
+
+**Positive is convex**, which is the way round every map reads it and the opposite of the arithmetic — the second difference of height is negative at a hilltop, and is turned over here.
+
+Curvature runs either side of zero and a texture runs 0 to 1, so **`Normalize`** decides how one becomes the other:
+
+| **`Normalize`** | What a cell holds |
+|-----------------|-------------------|
+| `true` *(default)* | No bend is mid grey, convex lighter, concave darker |
+| `false` | The curvature itself, in reciprocal studs |
+
+- **Normalised** is a picture of *where* the ground bends rather than of how much, since the scale comes from this biome's own ground and nothing else: the same hillside reads differently beside a cliff than beside a lawn. **The sharpest hundredth of the ground saturates to flat black or white.** That is deliberate — terrain has a handful of cells (the lip of a quarry, the seam where two sculpted patches meet, a single voxel spike) bending ten times as hard as any hillside near them, and scaled against one of those the whole place comes out mid grey. Over the Elwynn biome that is the difference between a picture using 0.39 to 0.61 of its range and one using nearly all of it. Even so, four fifths of that ground sits between 0.4 and 0.6: real terrain mostly does not bend, and as a density this is close to a coin toss except where something is actually going on.
+- **Unnormalised** is the honest reading of a signed quantity in an unsigned picture, and it is nearly useless as one: a texture cannot hold a negative, so **every concave cell in the place reads `0`**, and since real ground bends by a hundredth of a reciprocal stud or so, what is left is nearly black as well — 87% of the Elwynn biome lands in the lowest tenth. Turn it off only to read a number back out of a cell.
+
+Wired into a **`Density`** slot, normalised, this is the difference between what collects in a hollow — leaf litter, ferns, standing water — and what stands on an edge.
+
+---
+
+### Texture arithmetic
+
+Four nodes do arithmetic on two [density textures](#density-masking), cell by cell: [`TextureAdd`](#textureadd), [`TextureSubtract`](#texturesubtract), [`TextureMultiply`](#texturemultiply) and [`TextureDivide`](#texturedivide). They are how the several things a rule cares about — not on the cliffs, not near the road, thicker in patches — become one mask. This section is what they share; each has its own below.
+
+**Two ports, no parameters.** Every one of them reads **`A`** and **`B`**, both [Texture 2D](#data-types), and hands back a texture of the same kind. There is nothing to type on the card: a figure to add or to scale by is a [`Number`](#number) wired to a side, so that several nodes can share the one figure.
+
+| Node | Arithmetic | As a mask | Identity |
+|------|-----------|-----------|----------|
+| [`TextureAdd`](#textureadd) | `A + B` | Roughly *either of these* | `0` |
+| [`TextureSubtract`](#texturesubtract) | `A - B` | *This but not that* | `0` on **`B`** |
+| [`TextureMultiply`](#texturemultiply) | `A × B` | *Both of these* | `1` |
+| [`TextureDivide`](#texturedivide) | `A ÷ B` | Mostly a way to scale one up | `1` on **`B`** |
+
+Four things follow from a texture holding a shade from 0 to 1 rather than a number, and they matter more than the arithmetic does:
+
+- **The result is clamped where it leaves the node**, not at the end of the chain. A sum past white comes out white and a difference below black comes out black, so a chain that dips under black and means to climb back does not come back: the information is lost at the node that lost it. Multiplying is the only one of the four that cannot clamp, two shades never making more than a shade.
+- **A [`Number`](#number) may be wired to either side**, and is [read as a texture of that one flat shade](#conversions). Multiplying by `0.5` halves a mask everywhere; subtracting a texture from a `Number` of `1` turns it over, black for white, which is how *the low ground* is made out of [`TerrainHeight`](#terrainheight).
+- **Both sides may be on different grids.** The result is laid out on **`A`**'s, with **`B`** [read at each of A's cell centres](#the-grid). Two textures made at one **`VoxelSize`** line up cell for cell and nothing is resampled; one made at another is read between its cells, like anything else read at a position. Wire the finer texture to **`A`** if it matters, since that is the grid that survives.
+- **An empty side reads as the operation's identity** — nothing to add, one to multiply by — so a node with only **`A`** wired hands **`A`** on unchanged. It says so in the Output window, a half-wired node being half-built more often than deliberate. On subtract and divide it is only **`B`** that leaves the other side alone: an empty **`A`** is nothing minus **`B`**, which is black, or one over **`B`**, which is white nearly everywhere. Both are what the arithmetic says, and both are meant to look wrong. With neither side wired the node produces nothing at all.
+
+They cost one pass over the cells and read no terrain, which is nothing beside the nodes upstream of them, and like every texture node the answer is worked out once per run however many rules read it. All four draw [what they made](#seeing-what-a-node-measured) on their cards.
+
+---
+
+### TextureAdd
+
+`A + B`, cell by cell. See [Texture arithmetic](#texture-arithmetic) for what the four share.
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **`NodeType`** | `string` | Yes | **`TextureAdd`** |
+
+**Inputs:** **`A`** and **`B`**, both [Texture 2D](#data-types). A [`Number`](#number) may be wired to either.
+
+**Output:** a [Texture 2D](#data-types) laid out on **`A`**'s grid.
+
+Two masks added keep whatever either of them would have kept, and the ground both of them like comes out white. It is the sum rather than the odds of one or the other, so two mid-greys make white where *either* would properly make `0.75` — near enough for a mask, and worth knowing before reading a value back out of a cell.
+
+The obvious use is a floor under a mask: add a [`Number`](#number) of `0.2` to a texture and nowhere is quite black any more, so a rule thins out everywhere instead of stopping dead in places.
+
+---
+
+### TextureSubtract
+
+`A - B`, cell by cell. **The order matters.** See [Texture arithmetic](#texture-arithmetic) for what the four share.
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **`NodeType`** | `string` | Yes | **`TextureSubtract`** |
+
+**Inputs:** **`A`** and **`B`**, both [Texture 2D](#data-types). A [`Number`](#number) may be wired to either.
+
+**Output:** a [Texture 2D](#data-types) laid out on **`A`**'s grid.
+
+Ground **`A`** likes and **`B`** does not comes through; ground they both like is cut back by however much **`B`** liked it. **`B`** being white anywhere means nothing survives there whatever **`A`** said, everything below black being clamped to it.
+
+**Turning a mask over** is this node with a [`Number`](#number) of `1` wired to **`A`**: white becomes black and black white. That is worth knowing, because *the low ground* and *the gentle slopes* are the other way round from how [`TerrainHeight`](#terrainheight) and [`TerrainSlope`](#terrainslope) measure them, and inverting is how a rule gets at them.
+
+---
+
+### TextureMultiply
+
+`A × B`, cell by cell. See [Texture arithmetic](#texture-arithmetic) for what the four share.
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **`NodeType`** | `string` | Yes | **`TextureMultiply`** |
+
+**Inputs:** **`A`** and **`B`**, both [Texture 2D](#data-types). A [`Number`](#number) may be wired to either.
+
+**Output:** a [Texture 2D](#data-types) laid out on **`A`**'s grid.
+
+The everyday one. A point has to survive **`A`** and then survive **`B`**, and two chances one after the other are the product of them, so multiplying is honestly *both of these* in a way adding is not honestly *either*. It is exactly what wiring two densities onto two nodes of one chain already did — the difference being that here the two are a single texture, which several rules can share and which draws its own picture on the canvas.
+
+Over the Elwynn biome, a [`TerrainSlope`](#terrainslope) texture keeps about a third of the points snapped to that ground; multiplied by a mid-grey [`NoiseTexture2D`](#noisetexture2d) it keeps about a sixth, which is the two chances one after the other.
+
+Multiplying by a [`Number`](#number) is the cheapest way to say *half as much of this, wherever it is*.
+
+---
+
+### TextureDivide
+
+`A ÷ B`, cell by cell. **The order matters.** See [Texture arithmetic](#texture-arithmetic) for what the four share.
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| **`NodeType`** | `string` | Yes | **`TextureDivide`** |
+
+**Inputs:** **`A`** and **`B`**, both [Texture 2D](#data-types). A [`Number`](#number) may be wired to either.
+
+**Output:** a [Texture 2D](#data-types) laid out on **`A`**'s grid.
+
+The odd one of the four. A texture holds 0 to 1, so dividing by anything short of white makes the result larger, and one ordinary mask over another is white across most of its ground — which as a density means *keep everything*, and is rarely what anyone wanted. What it is good for is dividing by a [`Number`](#number): **`A`** over `0.25` is **`A`** four times as strong, brightening a faint mask where multiplying could only fade it.
+
+**Dividing by black** has no answer, so one is chosen: a cell comes out **white where `A` is anything at all, and black where `A` is black as well** — nothing shared among nothing. Both are where the arithmetic itself lands once clamped, infinity on white and nothing-over-nothing on black. The node says how many of its cells it happened to, since a division that is mostly white by way of its divisor is usually a mistake; add a little to **`B`** first, or wire something that is nowhere black.
+
+---
+
 ### Number
 
 Source node. Holds one number and hands it to everything wired to it. There is nothing to compute; the node exists so that a figure several rules depend on — a threshold distance, or how big a prop is allowed to get — is one thing in one place rather than the same number typed into each of them. Change the node and every rule reading it changes together.
@@ -769,7 +1018,9 @@ An empty **`Density`** port thins nothing, and so does one wired to a node that 
 
 Each texture is built once per evaluation however many rules read it.
 
-**Making one:** [`SDFThreshold2D`](#sdfthreshold2d) cuts a [distance field](#materialsdf2d) into black and white — keep off the water, hold a clearing around the road. [`NoiseTexture2D`](#noisetexture2d) fills one with soft blotches to break a scatter up. Wiring both, on two nodes of one chain, gives patchy ground cover that also respects the roads.
+**Making one:** [`SDFThreshold2D`](#sdfthreshold2d) cuts a [distance field](#materialsdf2d) into black and white — keep off the water, hold a clearing around the road. [`NoiseTexture2D`](#noisetexture2d) fills one with soft blotches to break a scatter up. [Four more read the ground itself](#reading-the-ground) — its height, steepness, aspect and curvature — which is how a rule keeps to the valley floor, off the cliffs, or on the sunny side of a ridge. Wiring several, on the nodes of one chain, multiplies them: patchy ground cover that also respects the roads and stays off the crags.
+
+**Combining them:** [four more do arithmetic on two textures](#texture-arithmetic) — added, subtracted, multiplied, divided, cell by cell — which is the same thinning said in one texture instead of spread over a chain. [`TextureMultiply`](#texturemultiply) is *both of these* and does explicitly what wiring two densities to two nodes does by accident; [`TextureSubtract`](#texturesubtract) with a [`Number`](#number) of `1` on **`A`** turns a mask over, which is how *the low ground* is made out of a heightmap. A combined texture is one node several rules can share, and one picture on the canvas to read instead of a chain of them.
 
 **A flat one:** a [`Number`](#number) wired straight into a **`Density`** port is [read as a texture](#conversions) of that one shade, which thins a rule by a fixed fraction everywhere — `0.3` keeps about a third of its candidates, wherever they stand. It is the simplest way to make one rule sparser without touching its spacing, and one `Number` wired into several rules thins them all together.
 
@@ -777,7 +1028,7 @@ Each texture is built once per evaluation however many rules read it.
 
 ## Seeing what a node measured
 
-The three nodes that measure something over the ground — [`MaterialSDF2D`](#materialsdf2d), [`SDFThreshold2D`](#sdfthreshold2d) and [`NoiseTexture2D`](#noisetexture2d) — draw what they made on their own cards in the Graph View, as a small thumbnail along the bottom: the ground seen from above, in the shape the volumes actually cover.
+Every node that measures something over the ground — [`MaterialSDF2D`](#materialsdf2d), [`SDFThreshold2D`](#sdfthreshold2d), [`NoiseTexture2D`](#noisetexture2d), the four that [read the terrain](#reading-the-ground) and the four that [do arithmetic on two textures](#texture-arithmetic) — draws what it made on its own card in the Graph View, as a small thumbnail along the bottom: the ground seen from above, in the shape the volumes actually cover.
 
 **A picture appears only once the node has been evaluated**, since until then there is nothing to draw — a graph opened without being run shows plain cards, and running it fills them in. Each run first blanks the cards of the graph it is about to run, so a picture is always of the last run that could have made it, and a node cut out of its graph goes back to showing nothing rather than keeping a picture of when it still mattered. [Evaluate Graph](#persisting-hand-edits) blanks only its own graph's cards, as it leaves everything else about the other graphs alone.
 
@@ -920,6 +1171,11 @@ A rule that loses a large fraction of its placements between runs — usually a 
 | `MaterialSDF2D` | `NodeType`, `Materials`, `VoxelSize` |
 | `SDFThreshold2D` | `NodeType` *(both parameters are wires)* |
 | `NoiseTexture2D` | `NodeType`, `Scale`, `Phase`, `VoxelSize` |
+| `TerrainHeight` | `NodeType`, `VoxelSize` |
+| `TerrainSlope` | `NodeType`, `Kernel`, `VoxelSize` |
+| `TerrainAspect` | `NodeType`, `Kernel`, `VoxelSize` |
+| `TerrainCurvature` | `NodeType`, `Kernel`, `Normalize`, `VoxelSize` |
+| `TextureAdd`, `TextureSubtract`, `TextureMultiply`, `TextureDivide` | `NodeType` *(both sides are wires)* |
 | `Number` | `NodeType`, `Value` |
 | `Reroute` | `NodeType` *(its one input is a wire)* |
 | `MergePoints` | `NodeType` *(one wire per input, however many there are)* |
@@ -937,7 +1193,7 @@ A rule that loses a large fraction of its placements between runs — usually a 
 | Wire: `Input` | `NodeType` = whatever the [reroute](#reroute) carries |
 | Wire: `SDF` | `NodeType` = `SDFGrid2D` |
 | Wire: `Distance` | `NodeType` = `Number` |
-| Wire: `A`, `B` | `NodeType` = `Rotation`, `Vector3` or `Number`, whichever that [range node](#the-two-ends-of-a-range) takes |
+| Wire: `A`, `B` | `NodeType` = `Rotation`, `Vector3` or `Number`, whichever that [range node](#the-two-ends-of-a-range) takes, or `Texture2D` on a [texture operation](#texture-arithmetic) |
 | Wire: a [merge](#mergepoints) input | `NodeType` = `Points` or `Instances`; named after the node it comes from |
 
 A **`PlaceGeometryOnPoints`** node added from a rule template also carries
@@ -966,6 +1222,7 @@ lists. Deleting it just returns the node to the automatic column layout.
 | `src/shared/ScatterGraph/GridLayout2D.luau` | Where the flat [grid](#the-grid) every field and texture of one evaluation shares sits over the ground, and how a value is read back out of one at a world position |
 | `src/shared/ScatterGraph/SDFGrid2D.luau` | A shape on the ground measured onto that grid as the distance to it, from cells already marked off as `MaterialSDF2D` marks them |
 | `src/shared/ScatterGraph/Texture2D.luau` | A greyscale image on that grid, filled cell by cell or from a function of position, and read as a [density](#density-masking) |
+| `src/shared/ScatterGraph/TerrainHeightfield.luau` | How high the ground is at every cell of that grid, [read once per run](#reading-the-ground) and shared by the four nodes that measure the terrain, with the slope and bend that follow from it |
 | `src/shared/ScatterGraph/TexturePreview.luau` | The thumbnail of each texture and field a run made, shrunk once and kept against the node that made it, for the Graph view to [draw on its card](#seeing-what-a-node-measured) |
 | `src/shared/ScatterGraph/RulesWindow.luau` | "Spreadsheet View" dock widget: lists the place's graphs and the chosen graph's outputs, edits the attributes and Asset wire of the nodes feeding each one, and adds or deletes both graphs and rules |
 | `src/shared/ScatterGraph/GraphView.luau` | "Graph View" dock widget: one graph as a canvas of wired nodes that can be added, moved, rewired and deleted, beside the parameters of the selected node |
@@ -983,3 +1240,5 @@ lists. Deleting it just returns the node to the automatic column layout.
 | `src/shared/ScatterGraph/Nodes/` | Per-node evaluation logic |
 | `src/shared/ScatterGraph/Nodes/MergeNode.luau` | What both merges do — read every node wired in and hand on all of it — with [`MergePointsNode`](#mergepoints) and [`MergeInstancesNode`](#mergeinstances) naming which of the two things it is |
 | `src/shared/ScatterGraph/Nodes/PointRangeNode.luau` | What the three range nodes do — read a cloud and two ends, and settle one part of every point between them — with [`SetRotationRangeNode`](#setrotationrange), [`SetScaleRangeNode`](#setscalerange) and [`SetTranslationOffsetRangeNode`](#settranslationoffsetrange) naming which part |
+| `src/shared/ScatterGraph/Nodes/TerrainTextureNode.luau` | What the four nodes that [read the ground](#reading-the-ground) share — the resolution, the kernel, the heightfield and the cache — with [`TerrainHeightNode`](#terrainheight), [`TerrainSlopeNode`](#terrainslope), [`TerrainAspectNode`](#terrainaspect) and [`TerrainCurvatureNode`](#terraincurvature) filling in what each makes of it |
+| `src/shared/ScatterGraph/Nodes/TextureMathNode.luau` | What the four [texture operations](#texture-arithmetic) share — reading both sides, standing an empty one at the identity, lining up two grids and walking the cells — with [`TextureAddNode`](#textureadd), [`TextureSubtractNode`](#texturesubtract), [`TextureMultiplyNode`](#texturemultiply) and [`TextureDivideNode`](#texturedivide) supplying the one operator each |

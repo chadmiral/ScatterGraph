@@ -14,6 +14,14 @@ local ScatterPointsAroundPointsNode = require(script.Parent.Nodes:WaitForChild("
 local MaterialSDF2DNode = require(script.Parent.Nodes:WaitForChild("MaterialSDF2DNode"))
 local SDFThreshold2DNode = require(script.Parent.Nodes:WaitForChild("SDFThreshold2DNode"))
 local NoiseTexture2DNode = require(script.Parent.Nodes:WaitForChild("NoiseTexture2DNode"))
+local TerrainHeightNode = require(script.Parent.Nodes:WaitForChild("TerrainHeightNode"))
+local TerrainSlopeNode = require(script.Parent.Nodes:WaitForChild("TerrainSlopeNode"))
+local TerrainAspectNode = require(script.Parent.Nodes:WaitForChild("TerrainAspectNode"))
+local TerrainCurvatureNode = require(script.Parent.Nodes:WaitForChild("TerrainCurvatureNode"))
+local TextureAddNode = require(script.Parent.Nodes:WaitForChild("TextureAddNode"))
+local TextureSubtractNode = require(script.Parent.Nodes:WaitForChild("TextureSubtractNode"))
+local TextureMultiplyNode = require(script.Parent.Nodes:WaitForChild("TextureMultiplyNode"))
+local TextureDivideNode = require(script.Parent.Nodes:WaitForChild("TextureDivideNode"))
 local NumberNode = require(script.Parent.Nodes:WaitForChild("NumberNode"))
 local RerouteNode = require(script.Parent.Nodes:WaitForChild("RerouteNode"))
 local ParentInstancesToNode = require(script.Parent.Nodes:WaitForChild("ParentInstancesToNode"))
@@ -25,6 +33,7 @@ local SetRotationRangeNode = require(script.Parent.Nodes:WaitForChild("SetRotati
 local SetScaleRangeNode = require(script.Parent.Nodes:WaitForChild("SetScaleRangeNode"))
 local SetTranslationOffsetRangeNode = require(script.Parent.Nodes:WaitForChild("SetTranslationOffsetRangeNode"))
 local GridLayout2D = require(script.Parent:WaitForChild("GridLayout2D"))
+local TerrainHeightfield = require(script.Parent:WaitForChild("TerrainHeightfield"))
 local DataTypes = require(script.Parent:WaitForChild("DataTypes"))
 local TexturePreview = require(script.Parent:WaitForChild("TexturePreview"))
 local Helpers = require(script.Parent:WaitForChild("ScatterGraphHelpers"))
@@ -100,6 +109,14 @@ local nodeRegistry = {
 	MaterialSDF2D = MaterialSDF2DNode,
 	SDFThreshold2D = SDFThreshold2DNode,
 	NoiseTexture2D = NoiseTexture2DNode,
+	TerrainHeight = TerrainHeightNode,
+	TerrainSlope = TerrainSlopeNode,
+	TerrainAspect = TerrainAspectNode,
+	TerrainCurvature = TerrainCurvatureNode,
+	TextureAdd = TextureAddNode,
+	TextureSubtract = TextureSubtractNode,
+	TextureMultiply = TextureMultiplyNode,
+	TextureDivide = TextureDivideNode,
 	Number = NumberNode,
 	Vector3 = Vector3Node,
 	Rotation = RotationNode,
@@ -221,6 +238,12 @@ local function evaluateGraph(g, volumes, terrain, graphKey)
 	-- field and texture made anywhere in this graph covers the same ground.
 	currentGridLayout = GridLayout2D.layoutFor(volumes)
 	currentFieldCache = {}
+	-- The ground itself, which the four terrain textures read and which several of
+	-- them share: held by the grid it was read on rather than by the node that
+	-- asked, since two nodes at one resolution are asking the same question. Dropped
+	-- here rather than kept, because the terrain does not move during a run and does
+	-- between them.
+	TerrainHeightfield.clear()
 	currentOccupancy = OccupancyStore.new()
 	currentOccupancy.run = currentRun
 	currentOccupancy.graphKey = graphKey

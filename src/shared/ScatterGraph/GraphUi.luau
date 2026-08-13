@@ -52,6 +52,17 @@ local MENU_WIDTH = 168
 -- A divider is a line with a little air either side of it, so the groups it
 -- separates read as groups rather than as a list with a stripe through it.
 local DIVIDER_HEIGHT = 7
+-- What a menu of groups opens beside itself is given. Wider than the menu that
+-- opened it, since a group holds the long names -- the longest today, "Set
+-- Translation Offset Range", measures 141 pixels at the size these are drawn --
+-- while the groups themselves are a word or two each.
+local SUBMENU_WIDTH = 192
+-- The arrow at the right-hand end of a row that opens one, and the room kept clear
+-- for it. A filled triangle rather than the smaller U+25B8 next to it in Unicode:
+-- that one is not in the font these are drawn in and comes out as the fallback box,
+-- which measures the same eight pixels as any other glyph the font lacks.
+local SUBMENU_ARROW = "\u{25B6}"
+local ARROW_WIDTH = 12
 
 -- How tall a row is, by what the row is: a heading over a group, a line between
 -- two groups, or something to pick. A list's height is the sum of these rather
@@ -283,15 +294,177 @@ function GraphUi.newOverlay()
 		end
 	end
 
-	-- A list floated over the window on a full-window backdrop that dismisses it
-	-- when clicked, at a place already worked out. Items are
-	-- { text, activate, enabled, icon, kind }; an item without an action, or with
-	-- enabled false, is a line of text the menu shows but does not offer.
-	--
-	-- A kind of "header" is a heading over the rows below it and a "divider" is a
-	-- line between two groups of them; neither is pickable. An icon is drawn
-	-- ahead of the text the way the ribbon draws one, which is what marks a row
-	-- out as doing more than the plain rows around it.
+	--[[
+		A list floated over the window on a full-window backdrop that dismisses it
+		when clicked, at a place already worked out. Items are
+		{ text, activate, enabled, icon, kind }; an item without an action, or with
+		enabled false, is a line of text the menu shows but does not offer.
+
+		A kind of "header" is a heading over the rows below it and a "divider" is a
+		line between two groups of them; neither is pickable. An icon is drawn ahead
+		of the text the way the ribbon draws one, which is what marks a row out as
+		doing more than the plain rows around it.
+
+		A kind of "submenu" carries `items` of its own and opens them beside itself,
+		marked with an arrow at its right-hand end. It is drawn on hover rather than
+		on click, the way Studio's own menus are: hovering any other row of the same
+		list puts it away again, so sweeping down a menu of groups opens each in turn
+		and leaves one open at a time. Nested lists are children of the one backdrop
+		rather than lists of their own, so dismissing the menu takes all of them with
+		it and only the outermost list has to be remembered.
+	]]
+	local function buildList(backdrop: GuiObject, items, at: Vector2, width: number, depth: number): Frame
+		local list = Instance.new("Frame")
+		list.Size = UDim2.fromOffset(width, listHeight(items))
+		list.Position = UDim2.fromOffset(at.X, at.Y)
+		list.BackgroundColor3 = GraphUi.color(Enum.StudioStyleGuideColor.MainBackground)
+		list.BorderColor3 = GraphUi.color(Enum.StudioStyleGuideColor.Border)
+		-- Above the list it was opened from, which matters only where there was no
+		-- room beside that one and the two overlap.
+		list.ZIndex = 11 + depth
+		list.Parent = backdrop
+
+		local layout = Instance.new("UIListLayout")
+		layout.SortOrder = Enum.SortOrder.LayoutOrder
+		layout.Parent = list
+
+		-- One open flyout per list, so the menu never fans out into several at once,
+		-- remembered along with the row it belongs to: hovering a second row has to
+		-- know that what is open is not its own before it takes over.
+		local child: Frame? = nil
+		local openedBy: GuiObject? = nil
+
+		local function closeChild()
+			if child ~= nil then
+				child:Destroy()
+				child = nil
+				openedBy = nil
+			end
+		end
+
+		-- Where the top of a row sits, in the window's own pixels: what a flyout
+		-- from it is lined up with.
+		local top = at.Y
+
+		for index, item in items do
+			local rowTop = top
+			top += rowHeight(item)
+
+			if item.kind == "header" then
+				local header = GraphUi.makeLabel(item.text, GraphUi.color(Enum.StudioStyleGuideColor.BrightText), true)
+				header.Size = UDim2.new(1, 0, 0, SECTION_HEIGHT)
+				header.LayoutOrder = index
+				header.BackgroundColor3 = GraphUi.color(Enum.StudioStyleGuideColor.Titlebar)
+				header.BackgroundTransparency = 0
+				header.BorderSizePixel = 0
+				header.ZIndex = list.ZIndex
+				GraphUi.indent(header)
+				header.Parent = list
+			elseif item.kind == "divider" then
+				-- The line sits in a taller empty row rather than being the row,
+				-- which is where the air either side of it comes from.
+				local gap = Instance.new("Frame")
+				gap.Size = UDim2.new(1, 0, 0, DIVIDER_HEIGHT)
+				gap.LayoutOrder = index
+				gap.BackgroundTransparency = 1
+				gap.BorderSizePixel = 0
+				gap.ZIndex = list.ZIndex
+				gap.Parent = list
+
+				local line = Instance.new("Frame")
+				line.Position = UDim2.fromOffset(0, math.floor(DIVIDER_HEIGHT / 2))
+				line.Size = UDim2.new(1, 0, 0, 1)
+				line.BackgroundColor3 = GraphUi.color(Enum.StudioStyleGuideColor.Border)
+				line.BorderSizePixel = 0
+				line.ZIndex = list.ZIndex
+				line.Parent = gap
+			else
+				local opens = item.kind == "submenu"
+				local enabled = opens or (item.activate ~= nil and item.enabled ~= false)
+
+				local button = Instance.new("TextButton")
+				button.Size = UDim2.new(1, 0, 0, ROW_HEIGHT)
+				button.LayoutOrder = index
+				button.BackgroundColor3 = GraphUi.color(Enum.StudioStyleGuideColor.TableItem)
+				button.BorderSizePixel = 0
+				button.AutoButtonColor = enabled
+				button.Font = Enum.Font.SourceSans
+				button.TextSize = 14
+				button.TextColor3 = GraphUi.color(
+					if enabled then Enum.StudioStyleGuideColor.MainText else Enum.StudioStyleGuideColor.DimmedText
+				)
+				button.TextXAlignment = Enum.TextXAlignment.Left
+				button.TextTruncate = Enum.TextTruncate.AtEnd
+				button.Text = if item.icon ~= nil then item.icon .. "  " .. item.text else item.text
+				button.ZIndex = list.ZIndex
+				GraphUi.indent(button)
+				button.Parent = list
+
+				if opens then
+					local arrow = GraphUi.makeLabel(SUBMENU_ARROW, button.TextColor3, false)
+					arrow.AnchorPoint = Vector2.new(1, 0)
+					arrow.Position = UDim2.new(1, -PADDING, 0, 0)
+					arrow.Size = UDim2.new(0, ARROW_WIDTH, 1, 0)
+					arrow.TextXAlignment = Enum.TextXAlignment.Right
+					arrow.ZIndex = list.ZIndex
+					arrow.Parent = button
+
+					-- The row's own text stops before the arrow, so a long name is
+					-- cut short rather than running under it.
+					local padding = button:FindFirstChildWhichIsA("UIPadding")
+					if padding ~= nil then
+						padding.PaddingRight = UDim.new(0, ARROW_WIDTH + PADDING)
+					end
+
+					local function open()
+						local window = root
+						if window == nil or openedBy == button then
+							return
+						end
+
+						-- Whatever another row of this list had open, the pointer has
+						-- left it for this one.
+						closeChild()
+
+						local childItems = item.items
+						local childWidth = item.width or SUBMENU_WIDTH
+						local childHeight = listHeight(childItems)
+						local size = window.AbsoluteSize
+
+						-- Beside the row, flipping to the other side of this list
+						-- where there is no room, and slid up where the list would
+						-- run off the bottom of the window.
+						local x = if at.X + width + childWidth <= size.X
+							then at.X + width
+							else math.max(0, at.X - childWidth)
+						local y = math.clamp(rowTop, 0, math.max(0, size.Y - childHeight))
+
+						child = buildList(backdrop, childItems, Vector2.new(x, y), childWidth, depth + 1)
+						openedBy = button
+					end
+
+					button.MouseEnter:Connect(open)
+					button.Activated:Connect(open)
+				else
+					-- Whatever flyout is open belongs to a row that is no longer
+					-- being pointed at.
+					button.MouseEnter:Connect(closeChild)
+
+					button.Activated:Connect(function()
+						if not enabled then
+							return
+						end
+
+						overlay.closeDropdown()
+						item.activate()
+					end)
+				end
+			end
+		end
+
+		return list
+	end
+
 	local function openList(items, at: Vector2, width: number)
 		overlay.closeDropdown()
 
@@ -316,78 +489,7 @@ function GraphUi.newOverlay()
 			end
 		end)
 
-		local list = Instance.new("Frame")
-		list.Size = UDim2.fromOffset(width, listHeight(items))
-		list.Position = UDim2.fromOffset(at.X, at.Y)
-		list.BackgroundColor3 = GraphUi.color(Enum.StudioStyleGuideColor.MainBackground)
-		list.BorderColor3 = GraphUi.color(Enum.StudioStyleGuideColor.Border)
-		list.ZIndex = 11
-		list.Parent = backdrop
-
-		local layout = Instance.new("UIListLayout")
-		layout.SortOrder = Enum.SortOrder.LayoutOrder
-		layout.Parent = list
-
-		for index, item in items do
-			if item.kind == "header" then
-				local header = GraphUi.makeLabel(item.text, GraphUi.color(Enum.StudioStyleGuideColor.BrightText), true)
-				header.Size = UDim2.new(1, 0, 0, SECTION_HEIGHT)
-				header.LayoutOrder = index
-				header.BackgroundColor3 = GraphUi.color(Enum.StudioStyleGuideColor.Titlebar)
-				header.BackgroundTransparency = 0
-				header.BorderSizePixel = 0
-				header.ZIndex = 11
-				GraphUi.indent(header)
-				header.Parent = list
-			elseif item.kind == "divider" then
-				-- The line sits in a taller empty row rather than being the row,
-				-- which is where the air either side of it comes from.
-				local gap = Instance.new("Frame")
-				gap.Size = UDim2.new(1, 0, 0, DIVIDER_HEIGHT)
-				gap.LayoutOrder = index
-				gap.BackgroundTransparency = 1
-				gap.BorderSizePixel = 0
-				gap.ZIndex = 11
-				gap.Parent = list
-
-				local line = Instance.new("Frame")
-				line.Position = UDim2.fromOffset(0, math.floor(DIVIDER_HEIGHT / 2))
-				line.Size = UDim2.new(1, 0, 0, 1)
-				line.BackgroundColor3 = GraphUi.color(Enum.StudioStyleGuideColor.Border)
-				line.BorderSizePixel = 0
-				line.ZIndex = 11
-				line.Parent = gap
-			else
-				local enabled = item.activate ~= nil and item.enabled ~= false
-
-				local button = Instance.new("TextButton")
-				button.Size = UDim2.new(1, 0, 0, ROW_HEIGHT)
-				button.LayoutOrder = index
-				button.BackgroundColor3 = GraphUi.color(Enum.StudioStyleGuideColor.TableItem)
-				button.BorderSizePixel = 0
-				button.AutoButtonColor = enabled
-				button.Font = Enum.Font.SourceSans
-				button.TextSize = 14
-				button.TextColor3 = GraphUi.color(
-					if enabled then Enum.StudioStyleGuideColor.MainText else Enum.StudioStyleGuideColor.DimmedText
-				)
-				button.TextXAlignment = Enum.TextXAlignment.Left
-				button.TextTruncate = Enum.TextTruncate.AtEnd
-				button.Text = if item.icon ~= nil then item.icon .. "  " .. item.text else item.text
-				button.ZIndex = 11
-				GraphUi.indent(button)
-				button.Parent = list
-
-				button.Activated:Connect(function()
-					if not enabled then
-						return
-					end
-
-					overlay.closeDropdown()
-					item.activate()
-				end)
-			end
-		end
+		buildList(backdrop, items, at, width, 0)
 	end
 
 	-- Hung below the button that asked for it, and as wide as that button so the

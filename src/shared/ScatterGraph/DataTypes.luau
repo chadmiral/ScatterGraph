@@ -129,6 +129,19 @@ local PRODUCES: { [string]: DataType } = {
 	MaterialSDF2D = SDF_GRID_2D,
 	SDFThreshold2D = TEXTURE_2D,
 	NoiseTexture2D = TEXTURE_2D,
+	-- The four that read the ground itself. Nothing is wired into one: what they
+	-- measure is the terrain under the volumes, which the run knows before the
+	-- graph is walked, so they start a chain the way the noise texture does.
+	TerrainHeight = TEXTURE_2D,
+	TerrainSlope = TEXTURE_2D,
+	TerrainAspect = TEXTURE_2D,
+	TerrainCurvature = TEXTURE_2D,
+	-- The four that do arithmetic on two of them, and so hand on the same kind of
+	-- thing they read.
+	TextureAdd = TEXTURE_2D,
+	TextureSubtract = TEXTURE_2D,
+	TextureMultiply = TEXTURE_2D,
+	TextureDivide = TEXTURE_2D,
 	Number = NUMBER,
 	Vector3 = VECTOR3,
 	Rotation = ROTATION,
@@ -143,6 +156,13 @@ local PRODUCES: { [string]: DataType } = {
 -- scatter survives where. Declared once, since they all read it the same way and
 -- their slots have to be named the same for it.
 local DENSITY_SLOT: Slot = { name = "Density", dataType = TEXTURE_2D, wireNodeType = TEXTURE_2D }
+
+-- The two sides every texture operation reads, in the order A then B -- which for
+-- the two that do not commute is the order the arithmetic is written in.
+local TEXTURE_SIDES: { Slot } = {
+	{ name = "A", dataType = TEXTURE_2D, wireNodeType = TEXTURE_2D },
+	{ name = "B", dataType = TEXTURE_2D, wireNodeType = TEXTURE_2D },
+}
 
 -- What a node reads, by NodeType, in the order the slots are drawn. A node with
 -- no entry here reads nothing: a note is not a working node at all.
@@ -193,6 +213,15 @@ local INPUTS: { [string]: { Slot } } = {
 		{ name = "A", dataType = VECTOR3, wireNodeType = VECTOR3 },
 		{ name = "B", dataType = VECTOR3, wireNodeType = VECTOR3 },
 	},
+
+	-- The two sides of an arithmetic node, declared once because all four take
+	-- them the same way. A Number may be wired to either, being read as a texture
+	-- of that one shade -- which is how a mask is scaled by a figure several rules
+	-- share.
+	TextureAdd = TEXTURE_SIDES,
+	TextureSubtract = TEXTURE_SIDES,
+	TextureMultiply = TEXTURE_SIDES,
+	TextureDivide = TEXTURE_SIDES,
 
 	PlaceGeometryOnPoints = {
 		{ name = "Points", dataType = POINTS, wireNodeType = POINTS },
