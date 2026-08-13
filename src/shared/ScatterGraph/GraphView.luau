@@ -118,12 +118,19 @@ local PORT_RING = 2
 local PORT_HIT = 14
 local WIRE_THICKNESS = 2
 local BREAK_SIZE = 10
--- A reroute is drawn as one dot rather than a card. It holds no parameters and
--- does nothing to what passes through it, so a card's worth of canvas would say
--- nothing the dot does not, and a wire bent around the graph should look like a
--- bent wire. Twice a port, because unlike a port it is also the handle the thing
--- is dragged by, and a round number of grid snaps so it lands on the grid square.
-local REROUTE_SIZE = 20
+-- A reroute is drawn as one small diamond rather than a card. It holds no
+-- parameters and does nothing to what passes through it, so a card's worth of
+-- canvas would say nothing the diamond does not, and a wire bent around the graph
+-- should look like a bent wire. A diamond rather than a dot so that it is not
+-- read as one of the ports it sits between and shares its colours with, and only
+-- a little larger than one of those, since unlike a port it is also the handle
+-- the thing is dragged by. Point to point, which is what the wires either side of
+-- it meet at the middle of.
+local REROUTE_SIZE = 14
+-- The side of the square that, turned forty-five degrees, is that diamond: a
+-- square is all Roblox will draw, so the diamond is one stood on its corner, and
+-- the span being corner to corner makes the side the shorter of the two.
+local REROUTE_FACE = math.round(REROUTE_SIZE / math.sqrt(2))
 -- The strip along the bottom of a texture node's card that its last evaluated
 -- texture is drawn in. Tall enough to read a pattern off and no taller: a card
 -- is a node, not a picture, and every card in a column grows by this much the
@@ -363,7 +370,7 @@ local NODE_TEMPLATES = {
 	{
 		-- A bend in a wire, for the canvas rather than the evaluation: it hands
 		-- on whatever reaches it, and takes the type of that when something does.
-		-- Drawn as a dot rather than a card, since that is all it is.
+		-- Drawn as a small diamond rather than a card, since that is all it is.
 		label = "Reroute",
 		name = "Reroute",
 		nodeType = "Reroute",
@@ -395,8 +402,8 @@ local function isNote(node: Instance): boolean
 	return node:GetAttribute("NodeType") == "Note"
 end
 
--- A bend in a wire rather than a step in the work: drawn as a dot the size of a
--- port, where the wire in and the wire out meet at the same point.
+-- A bend in a wire rather than a step in the work: drawn as a diamond a little
+-- larger than a port, where the wire in and the wire out meet at the same point.
 local function isReroute(node: Instance): boolean
 	return node:GetAttribute("NodeType") == "Reroute"
 end
@@ -2009,12 +2016,13 @@ local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 		overlay.watchForTooltip(strip, "Drag to move this note. Click the body to write in it.")
 	end
 
-	-- A reroute as a dot: no title, no parameter rows, and no pair of ports on
+	-- A reroute as a diamond: no title, no parameter rows, and no pair of ports on
 	-- opposite edges, since all three would be a card's worth of canvas spent
-	-- saying that a wire goes through here. It is drawn like the ports it stands
-	-- between -- the colour of what it carries, solid once something is wired into
-	-- it and a ring while nothing is -- so an empty one reads as an empty port
-	-- rather than needing a badge to say the same thing.
+	-- saying that a wire goes through here. It borrows the ports' language for
+	-- what it carries -- their colour, solid once something is wired into it and a
+	-- ring while nothing is -- so an empty one reads as empty without needing a
+	-- badge to say so, and keeps their shape to itself so that the thing on the
+	-- wire is never mistaken for the thing on the end of it.
 	local function makeRerouteCard(node: Instance)
 		local origin = positions[node] or Vector2.zero
 		local carried = DataTypes.producedBy(node)
@@ -2022,52 +2030,57 @@ local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 		local filled = port ~= nil and port.wire ~= nil and port.wire.Value ~= nil
 		local tint = DataTypes.color(carried)
 
+		-- The square the whole thing sits in, which is what is positioned, pressed
+		-- and dragged. It draws nothing itself: the diamond inside it is turned, and
+		-- a turned parent would take the hover port on its edge round with it.
 		local dot = Instance.new("TextButton")
 		dot.Position = UDim2.fromOffset(origin.X, origin.Y)
 		dot.Size = UDim2.fromOffset(REROUTE_SIZE, REROUTE_SIZE)
-		dot.BackgroundColor3 = tint
+		dot.BackgroundTransparency = 1
 		dot.BorderSizePixel = 0
 		dot.Text = ""
 		dot.AutoButtonColor = false
 		dot.Parent = nodeLayer
 
-		local corner = Instance.new("UICorner")
-		corner.CornerRadius = UDim.new(1, 0)
-		corner.Parent = dot
+		local face = Instance.new("Frame")
+		face.AnchorPoint = Vector2.new(0.5, 0.5)
+		face.Position = UDim2.fromScale(0.5, 0.5)
+		face.Size = UDim2.fromOffset(REROUTE_FACE, REROUTE_FACE)
+		face.Rotation = 45
+		face.BackgroundColor3 = tint
+		face.BorderSizePixel = 0
+		face.Parent = dot
 
-		-- A stroke rather than the border every card is edged with, since a border
-		-- is drawn square whatever the corner radius says and this one is a circle.
-		-- Border mode rather than the contextual default, which on a button means
-		-- the text it does not have.
+		-- A stroke rather than the border every card is edged with: a border is
+		-- drawn around the square before it is turned, which would leave the
+		-- diamond edged along axes it has none of. Border mode rather than the
+		-- contextual default, which on a frame is the same thing but says so.
 		local stroke = Instance.new("UIStroke")
 		stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 		stroke.Color = NODE_BORDER
 		stroke.Thickness = 1
-		stroke.Parent = dot
+		stroke.Parent = face
 
-		-- The hole in an empty reroute. Its ring is the same share of the dot as a
-		-- port's is of a port, so the two read as the same thing at their two
-		-- sizes. It takes no input of its own, so a press in the middle of the dot
-		-- still reaches the dot.
+		-- The hole in an empty reroute. Inset from the diamond by what a port's
+		-- ring is of a port, so an empty one of these and an empty port read as the
+		-- same thing said in two shapes. Inside the turned frame, so it is a
+		-- diamond too, and taking no input of its own, so a press in the middle of
+		-- the thing still reaches the square that handles it.
 		if not filled then
-			local ring = PORT_RING * REROUTE_SIZE / PORT_SIZE
+			local ring = PORT_RING * REROUTE_FACE / PORT_SIZE
 
 			local hole = Instance.new("Frame")
 			hole.AnchorPoint = Vector2.new(0.5, 0.5)
 			hole.Position = UDim2.fromScale(0.5, 0.5)
-			hole.Size = UDim2.fromOffset(REROUTE_SIZE - ring * 2, REROUTE_SIZE - ring * 2)
+			hole.Size = UDim2.fromOffset(REROUTE_FACE - ring * 2, REROUTE_FACE - ring * 2)
 			hole.BackgroundColor3 = color(Enum.StudioStyleGuideColor.InputFieldBackground)
 			hole.BorderSizePixel = 0
-			hole.Parent = dot
-
-			local holeCorner = Instance.new("UICorner")
-			holeCorner.CornerRadius = UDim.new(1, 0)
-			holeCorner.Parent = hole
+			hole.Parent = face
 		end
 
-		-- The dot stands in for the strip a card is selected by, so picking one
+		-- The diamond stands in for the strip a card is selected by, so picking one
 		-- lightens the type colour the way picking a card lightens its title.
-		cards[node] = { frame = dot, strip = dot, stroke = stroke, tint = tint, invalid = false }
+		cards[node] = { frame = dot, strip = face, stroke = stroke, tint = tint, invalid = false }
 
 		-- What a wire is pulled out of. A card keeps its two gestures apart by
 		-- geometry -- the body is dragged to move it, the port on its edge to wire
