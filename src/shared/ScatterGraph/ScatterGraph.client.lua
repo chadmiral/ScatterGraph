@@ -40,47 +40,21 @@ local InstanceFolder = workspace:FindFirstChild("ScatterGraphInstances")
 
 local toolbar = plugin:CreateToolbar("ScatterGraph")
 
--- A toolbar button takes an image, not a glyph. The first two are free public
--- decals rather than anything uploaded for this plugin, so they can in
--- principle be moderated away; the button falls back to no icon rather than
--- breaking if that happens. Each id is the decal's underlying image, which is
--- what the Icon property wants -- the decal id itself does not always resolve.
-local ICONS = {
-	evaluate = "rbxassetid://8772271242", -- pine tree, from decal 8772271280
-	clear = "rbxassetid://14002617467", -- trash can, from decal 14002617522
-}
-
--- These four buttons borrow Studio's own art instead, which is on disk beside
--- Studio rather than on the asset server: the node graph is the icon Studio
--- gives the Animation Graph Editor, the table the one it gives UITableLayout,
--- the wireframe box the one it gives SelectionBox (Promote Selection keeps the
--- selection), and the circular arrow the one it gives Rotate (Forget Edits
--- resets a rule so it regenerates). Each is drawn at the 32 pixel size a toolbar
--- button uses. Studio ships a copy per theme, and the dark copy is drawn light,
--- so which copy is used follows the theme -- see paintStudioIcons. The %s is the
--- theme name.
+-- These two buttons borrow Studio's own art, which is on disk beside Studio
+-- rather than on the asset server: the node graph is the icon Studio gives the
+-- Animation Graph Editor and the table the one it gives UITableLayout. Each is
+-- drawn at the 32 pixel size a toolbar button uses. Studio ships a copy per
+-- theme, and the dark copy is drawn light, so which copy is used follows the
+-- theme -- see paintStudioIcons. The %s is the theme name.
 local STUDIO_ICONS = {
 	graphView = "rbxasset://studio_svg_textures/Shared/WidgetIcons/%s/Large/AnimationGraphEditor.png",
 	spreadsheetView = "rbxasset://studio_svg_textures/Shared/InsertableObjects/%s/Standard/UITableLayout@2x.png",
-	promote = "rbxasset://studio_svg_textures/Shared/InsertableObjects/%s/Standard/SelectionBox@2x.png",
-	forget = "rbxasset://studio_svg_textures/Shared/InsertableObjects/%s/Standard/Rotate@2x.png",
 }
 
-local newScriptButton = toolbar:CreateButton("EvaluateScatterGraph", "Evaluate the Scatter Graph", ICONS.evaluate)
-local clearButton = toolbar:CreateButton("Clear Instances", "Clear all ScatterGraph Instances", ICONS.clear)
-local promoteButton = toolbar:CreateButton(
-	"Promote Selection",
-	"Lifts the selected placed instances out of the ScatterGraph for good: the next run leaves their points "
-		.. "empty and never overwrites them, whatever their stamp says. Select the instances in the Explorer "
-		.. "or viewport first.",
-	""
-)
-local forgetButton = toolbar:CreateButton(
-	"Forget Edits",
-	"Discards every rule's memory of hand edits -- all promotions and records of deleted points -- and removes "
-		.. "the instances they had promoted, so the next run places the whole place from nothing.",
-	""
-)
+-- Opening the two windows is all the toolbar does. Everything that runs a scatter
+-- or touches what one has placed is inside them, on the row that acts on the
+-- whole place: a button a ribbon away from the graph it acts on gives no clue
+-- which graph that is, and the answer was never on the toolbar to read.
 local spreadsheetViewButton = toolbar:CreateButton(
 	"Spreadsheet View",
 	"Browse and edit the rules of every ScatterGraph as a list",
@@ -105,8 +79,6 @@ local function paintStudioIcons()
 
 	spreadsheetViewButton.Icon = string.format(STUDIO_ICONS.spreadsheetView, theme)
 	graphViewButton.Icon = string.format(STUDIO_ICONS.graphView, theme)
-	promoteButton.Icon = string.format(STUDIO_ICONS.promote, theme)
-	forgetButton.Icon = string.format(STUDIO_ICONS.forget, theme)
 end
 
 paintStudioIcons()
@@ -469,15 +441,21 @@ local function onTestButtonClicked()
 	scatterPointsNode:evaluate(nil, nil, nil)
 end--]]
 
-newScriptButton.Click:Connect(onPluginButtonClicked)
-clearButton.Click:Connect(onClearButtonClicked)
-promoteButton.Click:Connect(onPromoteButtonClicked)
-forgetButton.Click:Connect(onForgetButtonClicked)
--- Each view owns its own button: clicking it toggles that view's dock widget.
--- Both are handed the scoped evaluation so they can offer it over the graph they
--- are showing; the evaluation itself stays here, with the rest of the run.
-RulesWindow.install(plugin, spreadsheetViewButton, evaluateOneGraph)
-GraphView.install(plugin, graphViewButton, evaluateOneGraph)
+-- Everything a window's ribbon can set running. All of it lives here, with the
+-- rest of the run, and is handed over rather than reached for: a window knows
+-- which graph it is showing and nothing about how a scatter is placed.
+local actions = {
+	evaluateGraph = evaluateOneGraph,
+	evaluateEverything = onPluginButtonClicked,
+	clearInstances = onClearButtonClicked,
+	promoteSelection = onPromoteButtonClicked,
+	forgetEdits = onForgetButtonClicked,
+}
+
+-- Each view owns its own toolbar button: clicking it toggles that view's dock
+-- widget.
+RulesWindow.install(plugin, spreadsheetViewButton, actions)
+GraphView.install(plugin, graphViewButton, actions)
 --brushButton.Click:Connect(onBrushButtonClicked)
 --testButton.Click:Connect(onTestButtonClicked)
 

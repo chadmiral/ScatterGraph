@@ -45,6 +45,7 @@ local SECTION_HEIGHT = GraphUi.SECTION_HEIGHT
 local HEADER_HEIGHT = GraphUi.HEADER_HEIGHT
 local RIBBON_HEIGHT = GraphUi.RIBBON_HEIGHT
 local BUTTON_HEIGHT = GraphUi.BUTTON_HEIGHT
+local RIBBON_LABELS_MIN_WIDTH = GraphUi.RIBBON_LABELS_MIN_WIDTH
 -- How the width is divided between the three panes. The last takes what is left.
 local GRAPH_COLUMN = 0.22
 local OUTPUT_COLUMN = 0.26
@@ -136,10 +137,19 @@ local function deleteRule(graph: Instance, output: ObjectValue, allOutputs: { Ob
 	end
 end
 
--- evaluateGraph runs one graph and leaves the rest of the place alone. It lives
--- with the rest of the evaluation, in the plugin script, and is handed here so
--- the ribbon can offer it over the graph this window has selected.
-function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton, evaluateGraph: ((Instance) -> ())?)
+-- What the ribbon can set running, all of it living with the rest of the
+-- evaluation in the plugin script and handed here so that this window can offer
+-- it: one graph at a time over the graph this window has selected, and the four
+-- that act on the whole place from the group at the right of the top row.
+export type Actions = {
+	evaluateGraph: ((Instance) -> ())?,
+	evaluateEverything: (() -> ())?,
+	clearInstances: (() -> ())?,
+	promoteSelection: (() -> ())?,
+	forgetEdits: (() -> ())?,
+}
+
+function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton, actions: Actions)
 	-- Three panes side by side need a wider window than two did.
 	local widgetInfo = DockWidgetPluginGuiInfo.new(Enum.InitialDockState.Float, false, false, 720, 400, 460, 240)
 	-- The id stays as it was named, whatever the window is called: it is what
@@ -338,11 +348,11 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton, eva
 	-- and the toolbar's Evaluate does not pretend otherwise either.
 	local function evaluateCurrentGraph()
 		local graph = activeGraph()
-		if evaluateGraph == nil or graph == nil then
+		if actions.evaluateGraph == nil or graph == nil then
 			return
 		end
 
-		evaluateGraph(graph)
+		actions.evaluateGraph(graph)
 	end
 
 	-- spec: { icon, label, tooltip, requires, activate }, where requires is
@@ -443,7 +453,11 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton, eva
 			edge.Parent = rootFrame
 		end
 
-		local function makeRibbonRow(y: number): Frame
+		-- As in the Graph view: the buttons flow from the left out of a holder
+		-- rather than off the row itself, so a control that belongs at the right can
+		-- sit there without the layout dragging it into the flow. The holder is
+		-- transparent and inactive, so it never swallows a click.
+		local function makeRibbonRow(y: number): (Frame, Frame)
 			local ribbon = Instance.new("Frame")
 			ribbon.Position = UDim2.fromOffset(0, y)
 			ribbon.Size = UDim2.new(1, 0, 0, RIBBON_HEIGHT)
@@ -451,26 +465,52 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton, eva
 			ribbon.BorderSizePixel = 0
 			ribbon.Parent = rootFrame
 
+			local buttons = Instance.new("Frame")
+			buttons.Size = UDim2.fromScale(1, 1)
+			buttons.BackgroundTransparency = 1
+			buttons.Parent = ribbon
+
 			local layout = Instance.new("UIListLayout")
 			layout.FillDirection = Enum.FillDirection.Horizontal
 			layout.VerticalAlignment = Enum.VerticalAlignment.Center
 			layout.SortOrder = Enum.SortOrder.LayoutOrder
 			layout.Padding = UDim.new(0, 4)
-			layout.Parent = ribbon
+			layout.Parent = buttons
 
 			local padding = Instance.new("UIPadding")
 			padding.PaddingLeft = UDim.new(0, PADDING)
-			padding.Parent = ribbon
+			padding.Parent = buttons
 
-			return ribbon
+			return ribbon, buttons
+		end
+
+		-- Where a control belongs at the right-hand end of a row instead. Added
+		-- after that row's button holder, so it draws over it and takes the click.
+		local function makeRightHolder(ribbon: Frame): Frame
+			local holder = Instance.new("Frame")
+			holder.AnchorPoint = Vector2.new(1, 0.5)
+			holder.Position = UDim2.new(1, -PADDING, 0.5, 0)
+			holder.Size = UDim2.new(0, 0, 0, BUTTON_HEIGHT)
+			holder.AutomaticSize = Enum.AutomaticSize.X
+			holder.BackgroundTransparency = 1
+			holder.Parent = ribbon
+
+			local layout = Instance.new("UIListLayout")
+			layout.FillDirection = Enum.FillDirection.Horizontal
+			layout.VerticalAlignment = Enum.VerticalAlignment.Center
+			layout.SortOrder = Enum.SortOrder.LayoutOrder
+			layout.Padding = UDim.new(0, 4)
+			layout.Parent = holder
+
+			return holder
 		end
 
 		-- Two rows, because the buttons act at two different scales: the top one
 		-- makes and unmakes whole graphs, the one below it edits the rules
 		-- inside the graph the top row left selected.
-		local graphRibbon = makeRibbonRow(0)
+		local graphRibbon, graphButtons = makeRibbonRow(0)
 		makeEdge(RIBBON_HEIGHT)
-		local ruleRibbon = makeRibbonRow(RIBBON_HEIGHT + 1)
+		local _, ruleButtons = makeRibbonRow(RIBBON_HEIGHT + 1)
 
 		-- Icons are emoji rather than rbxassetid images: the plugin ships no art,
 		-- and the emoji font is the one glyph source that is always present.
@@ -485,7 +525,7 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton, eva
 				.. "Explorer. Rename it there: a scatter volume names the graph it uses.",
 			requires = "none",
 			activate = createGraph,
-		}).Parent = graphRibbon
+		}).Parent = graphButtons
 		addRibbonButton({
 			icon = "\u{274C}",
 			label = "Delete Graph",
@@ -493,16 +533,16 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton, eva
 				.. "until they are pointed somewhere else. Undo brings it back.",
 			requires = "graph",
 			activate = deleteCurrentGraph,
-		}).Parent = graphRibbon
+		}).Parent = graphButtons
 		addRibbonButton({
 			icon = "\u{1F332}",
 			label = "Evaluate Graph",
 			tooltip = "Places the selected graph, in every enabled volume pointed at it. Only this graph is "
 				.. "run: what other graphs have placed is left standing, and their record of it is left "
-				.. "alone. The toolbar's Evaluate does the whole place at once.",
+				.. "alone. Evaluate All, at the right of this row, does the whole place at once.",
 			requires = "graph",
 			activate = evaluateCurrentGraph,
-		}).Parent = graphRibbon
+		}).Parent = graphButtons
 		addRibbonButton({
 			icon = "\u{274C}",
 			label = "Delete",
@@ -510,7 +550,7 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton, eva
 				.. "rule also feeds from is left alone.",
 			requires = "output",
 			activate = deleteSelectedRule,
-		}).Parent = ruleRibbon
+		}).Parent = ruleButtons
 		-- One button per template, in the templates' own order and under their own
 		-- names, since the Graph view offers the same ones from the same place.
 		for _, template in RuleTemplates.ordered do
@@ -522,8 +562,94 @@ function RulesWindow.install(pluginRef: Plugin, button: PluginToolbarButton, eva
 				activate = function()
 					addTemplateRule(template)
 				end,
-			}).Parent = ruleRibbon
+			}).Parent = ruleButtons
 		end
+
+		-- The four that act on the whole place rather than on the selected graph, at
+		-- the right-hand end of the top row, which is where the Graph view carries
+		-- them too -- there over its graph chooser, here over the list of graphs the
+		-- first column shows. All four were the toolbar's, and are here instead so
+		-- that running a scatter and looking at one are the same window. The first
+		-- two run and unrun it; the second two are about the edits made to what it
+		-- placed.
+		local placeButtons = makeRightHolder(graphRibbon)
+		local placeNames = {}
+
+		-- Named where there is room for the names and icons alone where there is
+		-- not, since this group is drawn over the one flowing from the left and
+		-- would otherwise cover it in a narrow window. The row is as wide as the
+		-- window whatever the buttons say, so reading its width to decide cannot
+		-- feed back into itself.
+		local function namePlaceButtons()
+			local named = graphRibbon.AbsoluteSize.X >= RIBBON_LABELS_MIN_WIDTH
+			for _, entry in placeNames do
+				entry.button.Text = if named then entry.icon .. "  " .. entry.label else entry.icon
+			end
+		end
+
+		local function addPlaceButton(spec)
+			local button = addRibbonButton(spec)
+			button.Parent = placeButtons
+			table.insert(placeNames, { button = button, icon = spec.icon, label = spec.label })
+		end
+
+		addPlaceButton({
+			icon = "\u{1F30D}",
+			label = "Evaluate All",
+			tooltip = "Places every graph in the place, in all of the enabled volumes pointed at them. Hand "
+				.. "edits are kept, as they are by Evaluate Graph, and a rule no volume asks for any more has "
+				.. "its records pruned.",
+			requires = "none",
+			activate = function()
+				if actions.evaluateEverything ~= nil then
+					actions.evaluateEverything()
+				end
+			end,
+		})
+
+		addPlaceButton({
+			icon = "\u{1F5D1}",
+			label = "Clear Instances",
+			tooltip = "Destroys everything every graph has placed anywhere in the place, and forgets that it "
+				.. "was placed so the next run puts it back. Promotions and deletions you have made are kept.",
+			requires = "none",
+			activate = function()
+				if actions.clearInstances ~= nil then
+					actions.clearInstances()
+				end
+			end,
+		})
+
+		addPlaceButton({
+			icon = "\u{1F4CC}",
+			label = "Promote",
+			tooltip = "Lifts the placed instances selected in the Explorer or the viewport out of the "
+				.. "ScatterGraph for good: the next run leaves their points empty and never overwrites them, "
+				.. "whatever their stamp says. Select them first.",
+			requires = "none",
+			activate = function()
+				if actions.promoteSelection ~= nil then
+					actions.promoteSelection()
+				end
+			end,
+		})
+
+		addPlaceButton({
+			icon = "\u{1F504}",
+			label = "Forget Edits",
+			tooltip = "Discards every rule's memory of hand edits across the whole place -- all promotions and "
+				.. "all records of deleted points -- and removes the instances it had promoted, so the next run "
+				.. "places everything from nothing.",
+			requires = "none",
+			activate = function()
+				if actions.forgetEdits ~= nil then
+					actions.forgetEdits()
+				end
+			end,
+		})
+
+		namePlaceButtons()
+		graphRibbon:GetPropertyChangedSignal("AbsoluteSize"):Connect(namePlaceButtons)
 
 		local paneTop = (RIBBON_HEIGHT + 1) * 2
 		makeEdge(paneTop - 1)

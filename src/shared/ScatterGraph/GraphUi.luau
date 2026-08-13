@@ -24,6 +24,12 @@ GraphUi.SECTION_HEIGHT = 24
 GraphUi.HEADER_HEIGHT = 26
 GraphUi.RIBBON_HEIGHT = 30
 GraphUi.BUTTON_HEIGHT = 22
+-- Below this, a ribbon row carrying a group at each end has not the width for
+-- both, and the group on the right -- drawn over the other, being added after it
+-- -- shows its icons alone. Measured from the top row of the Graph view with
+-- everything on it named, and used by both windows so that they narrow alike. A
+-- window can be dragged well under this: its own minimum is smaller again.
+GraphUi.RIBBON_LABELS_MIN_WIDTH = 720
 -- How much of an attribute row the name takes, leaving the rest to the editor.
 GraphUi.NAME_COLUMN = 0.45
 GraphUi.TOOLTIP_WIDTH = 280

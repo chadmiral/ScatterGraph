@@ -85,6 +85,7 @@ local PADDING = GraphUi.PADDING
 local HEADER_HEIGHT = GraphUi.HEADER_HEIGHT
 local RIBBON_HEIGHT = GraphUi.RIBBON_HEIGHT
 local BUTTON_HEIGHT = GraphUi.BUTTON_HEIGHT
+local RIBBON_LABELS_MIN_WIDTH = GraphUi.RIBBON_LABELS_MIN_WIDTH
 -- Where the canvas and panel begin: below both ribbon rows and the hairline
 -- under each. The divider drag reads this the same way the interface builds it.
 local PANE_TOP = (RIBBON_HEIGHT + 1) * 2
@@ -620,10 +621,19 @@ end
 -- would be two views of one thing, each able to invalidate the other.
 local view = nil
 
--- evaluateGraph runs one graph and leaves the rest of the place alone. It lives
--- with the rest of the evaluation, in the plugin script, and is handed here so
--- the ribbon can offer it over the graph on screen.
-local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
+-- What the ribbon can set running, all of it living with the rest of the
+-- evaluation in the plugin script and handed here so that this window can offer
+-- it: one graph at a time over the graph on screen, and the four that act on the
+-- whole place from the group above the graph chooser.
+export type Actions = {
+	evaluateGraph: ((Instance) -> ())?,
+	evaluateEverything: (() -> ())?,
+	clearInstances: (() -> ())?,
+	promoteSelection: (() -> ())?,
+	forgetEdits: (() -> ())?,
+}
+
+local function create(pluginRef: Plugin, actions: Actions)
 	local widgetInfo = DockWidgetPluginGuiInfo.new(Enum.InitialDockState.Float, false, false, 940, 560, 560, 320)
 	local widget = pluginRef:CreateDockWidgetPluginGui("ScatterGraphGraphView", widgetInfo)
 	widget.Name = "ScatterGraphGraphView"
@@ -2965,11 +2975,11 @@ local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 	-- record of having done so, which is not one edit to be stepped back over,
 	-- and the toolbar's Evaluate does not pretend otherwise either.
 	local function evaluateCurrentGraph()
-		if evaluateGraph == nil or graph == nil or not graph:IsDescendantOf(game) then
+		if actions.evaluateGraph == nil or graph == nil or not graph:IsDescendantOf(game) then
 			return
 		end
 
-		evaluateGraph(graph)
+		actions.evaluateGraph(graph)
 	end
 
 	-- Drops down every graph in the place, the same list the Spreadsheet view's
@@ -3150,9 +3160,32 @@ local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 			edge.Parent = rootFrame
 		end
 
+		-- Where a control belongs at the right-hand end of a row rather than in the
+		-- flow from the left. Added to the row after its button holder, so it draws
+		-- over it and takes the click; transparent and inactive, so the gap either
+		-- side of its buttons is not a target.
+		local function makeRightHolder(ribbon: Frame): Frame
+			local holder = Instance.new("Frame")
+			holder.AnchorPoint = Vector2.new(1, 0.5)
+			holder.Position = UDim2.new(1, -PADDING, 0.5, 0)
+			holder.Size = UDim2.new(0, 0, 0, BUTTON_HEIGHT)
+			holder.AutomaticSize = Enum.AutomaticSize.X
+			holder.BackgroundTransparency = 1
+			holder.Parent = ribbon
+
+			local layout = Instance.new("UIListLayout")
+			layout.FillDirection = Enum.FillDirection.Horizontal
+			layout.VerticalAlignment = Enum.VerticalAlignment.Center
+			layout.SortOrder = Enum.SortOrder.LayoutOrder
+			layout.Padding = UDim.new(0, 4)
+			layout.Parent = holder
+
+			return holder
+		end
+
 		table.clear(ribbonButtons)
 
-		local _, graphButtons = makeRibbonRow(0)
+		local graphRibbon, graphButtons = makeRibbonRow(0)
 		makeEdge(RIBBON_HEIGHT)
 		local nodeRibbon, nodeButtons = makeRibbonRow(RIBBON_HEIGHT + 1)
 
@@ -3179,10 +3212,96 @@ local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 			label = "Evaluate Graph",
 			tooltip = "Places the graph on screen, in every enabled volume pointed at it. Only this graph is "
 				.. "run: what other graphs have placed is left standing, and their record of it is left "
-				.. "alone. The toolbar's Evaluate does the whole place at once.",
+				.. "alone. Evaluate All, above the graph chooser, does the whole place at once.",
 			requires = "graph",
 			activate = evaluateCurrentGraph,
 		}).Parent = graphButtons
+
+		-- The four that act on the whole place rather than on the graph on screen,
+		-- at the right-hand end of the top row so they sit over the chooser: what
+		-- they do does not depend on which graph is picked, and reads better away
+		-- from the buttons that do. All four were the toolbar's, and are here
+		-- instead so that running a scatter and looking at one are the same window.
+		-- The first two run and unrun it; the second two are about the edits made to
+		-- what it placed.
+		local placeButtons = makeRightHolder(graphRibbon)
+		local placeNames = {}
+
+		-- Named where there is room for the names and icons alone where there is
+		-- not, since this group is drawn over the one flowing from the left and
+		-- would otherwise cover it in a narrow window. The row is as wide as the
+		-- window whatever the buttons say, so reading its width to decide cannot
+		-- feed back into itself.
+		local function namePlaceButtons()
+			local named = graphRibbon.AbsoluteSize.X >= RIBBON_LABELS_MIN_WIDTH
+			for _, entry in placeNames do
+				entry.button.Text = if named then entry.icon .. "  " .. entry.label else entry.icon
+			end
+		end
+
+		local function addPlaceButton(spec)
+			local button = addRibbonButton(spec)
+			button.Parent = placeButtons
+			table.insert(placeNames, { button = button, icon = spec.icon, label = spec.label })
+		end
+
+		addPlaceButton({
+			icon = "\u{1F30D}",
+			label = "Evaluate All",
+			tooltip = "Places every graph in the place, in all of the enabled volumes pointed at them. Hand "
+				.. "edits are kept, as they are by Evaluate Graph, and a rule no volume asks for any more has "
+				.. "its records pruned.",
+			requires = "none",
+			activate = function()
+				if actions.evaluateEverything ~= nil then
+					actions.evaluateEverything()
+				end
+			end,
+		})
+
+		addPlaceButton({
+			icon = "\u{1F5D1}",
+			label = "Clear Instances",
+			tooltip = "Destroys everything every graph has placed anywhere in the place, and forgets that it "
+				.. "was placed so the next run puts it back. Promotions and deletions you have made are kept.",
+			requires = "none",
+			activate = function()
+				if actions.clearInstances ~= nil then
+					actions.clearInstances()
+				end
+			end,
+		})
+
+		addPlaceButton({
+			icon = "\u{1F4CC}",
+			label = "Promote",
+			tooltip = "Lifts the placed instances selected in the Explorer or the viewport out of the "
+				.. "ScatterGraph for good: the next run leaves their points empty and never overwrites them, "
+				.. "whatever their stamp says. Select them first.",
+			requires = "none",
+			activate = function()
+				if actions.promoteSelection ~= nil then
+					actions.promoteSelection()
+				end
+			end,
+		})
+
+		addPlaceButton({
+			icon = "\u{1F504}",
+			label = "Forget Edits",
+			tooltip = "Discards every rule's memory of hand edits across the whole place -- all promotions and "
+				.. "all records of deleted points -- and removes the instances it had promoted, so the next run "
+				.. "places everything from nothing.",
+			requires = "none",
+			activate = function()
+				if actions.forgetEdits ~= nil then
+					actions.forgetEdits()
+				end
+			end,
+		})
+
+		namePlaceButtons()
+		graphRibbon:GetPropertyChangedSignal("AbsoluteSize"):Connect(namePlaceButtons)
 
 		local addButton
 		addButton = addRibbonButton({
@@ -3217,8 +3336,8 @@ local function create(pluginRef: Plugin, evaluateGraph: ((Instance) -> ())?)
 			activate = frameAll,
 		}).Parent = nodeButtons
 
-		-- The graph chooser, right-aligned on the node row so it lines up with the
-		-- window's edge the way the Spreadsheet view's list column does. Sits on
+		-- The graph chooser, right-aligned on the node row, under the two buttons
+		-- that act on the whole place and against the same edge as them. Sits on
 		-- the row rather than in its button holder, so the layout leaves it be. It
 		-- is added after the holder, so it draws on top and takes the click.
 		graphChooser = Instance.new("TextButton")
@@ -3643,9 +3762,9 @@ end
 
 -- The button owns the window: clicking it opens the graph the selection names,
 -- or closes the window if it is already up.
-function GraphView.install(pluginRef: Plugin, button: PluginToolbarButton, evaluateGraph: ((Instance) -> ())?)
+function GraphView.install(pluginRef: Plugin, button: PluginToolbarButton, actions: Actions)
 	if view == nil then
-		view = create(pluginRef, evaluateGraph)
+		view = create(pluginRef, actions)
 	end
 
 	view.attach(button)
